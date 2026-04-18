@@ -1,0 +1,1031 @@
+[
+  {
+    "id": 1,
+    "name": "Tomato",
+    "scientific_name": "Solanum lycopersicum",
+    "image_url": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea",
+    "description": "Popular fruiting plant with red juicy fruits.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seed absorbs water, radicle emerges."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-25",
+        "title": "Seedling",
+        "description": "First true leaves appear, roots establish."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "25-50",
+        "title": "Vegetative Growth",
+        "description": "Leaves and stems grow rapidly."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "50-80",
+        "title": "Flowering",
+        "description": "Yellow flowers bloom, pollination needed."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "80-110",
+        "title": "Fruit Development",
+        "description": "Green fruits form and enlarge."
+      },
+      {
+        "stage_id": 6,
+        "day_range": "110-140",
+        "title": "Ripening",
+        "description": "Fruits turn red, sugars develop."
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "name": "Bell Pepper",
+    "scientific_name": "Capsicum annuum",
+    "image_url": "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1",
+    "description": "Sweet pepper with thick flesh, colors vary.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-21",
+        "title": "Germination",
+        "description": "Seeds sprout in warm soil."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "21-49",
+        "title": "Seedling",
+        "description": "True leaves develop, needs ample light."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "49-77",
+        "title": "Vegetative",
+        "description": "Plant grows leaves and branches."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "77-98",
+        "title": "Flowering",
+        "description": "Small yellow flowers appear."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "98-126",
+        "title": "Fruiting",
+        "description": "Peppers grow to mature green size."
+      },
+      {
+        "stage_id": 6,
+        "day_range": "126-150",
+        "title": "Ripening",
+        "description": "Peppers change color to red/yellow/orange."
+      }
+    ]
+  },
+  {
+    "id": 3,
+    "name": "Cucumber",
+    "scientific_name": "Cucumis sativus",
+    "image_url": "https://images.unsplash.com/photo-1589621314927-22ea9b3d0c4f",
+    "description": "Creeping vine producing cylindrical fruits.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seed cracks, radicle emerges."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-24",
+        "title": "Seedling",
+        "description": "True leaves appear, stem thickens."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "24-45",
+        "title": "Vining",
+        "description": "Vines extend, side shoots emerge."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "45-60",
+        "title": "Flowering",
+        "description": "Male and female flowers bloom."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "60-80",
+        "title": "Fruiting",
+        "description": "Cucumbers form and grow rapidly."
+      },
+      {
+        "stage_id": 6,
+        "day_range": "80-100",
+        "title": "Harvest",
+        "description": "Cucumbers ready, firm and dark green."
+      }
+    ]
+  },
+  {
+    "id": 4,
+    "name": "Carrot",
+    "scientific_name": "Daucus carota",
+    "image_url": "https://images.unsplash.com/photo-1598170845058-78131a90f4bf",
+    "description": "Root vegetable, rich in beta\u2011carotene.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Slow germination, seeds need consistent moisture."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-30",
+        "title": "Seedling",
+        "description": "Grass\u2011like shoots emerge, delicate."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "30-60",
+        "title": "Root Development",
+        "description": "Taproot begins to swell underground."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "60-80",
+        "title": "Maturation",
+        "description": "Root reaches full size and color."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "80-100",
+        "title": "Harvest",
+        "description": "Ready when shoulder is \u00bd\u20131 inch wide."
+      }
+    ]
+  },
+  {
+    "id": 5,
+    "name": "Lettuce",
+    "scientific_name": "Lactuca sativa",
+    "image_url": "https://images.unsplash.com/photo-1540420773422-292677e6d003",
+    "description": "Leafy green, fast\u2011growing.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-7",
+        "title": "Germination",
+        "description": "Seeds sprout quickly in cool soil."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "7-21",
+        "title": "Seedling",
+        "description": "First true leaves, rosette forms."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "21-45",
+        "title": "Leaf Growth",
+        "description": "Leaves expand, head may form."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "45-60",
+        "title": "Maturity",
+        "description": "Leaves reach full size, ready for harvest."
+      }
+    ]
+  },
+  {
+    "id": 6,
+    "name": "Bean",
+    "scientific_name": "Phaseolus vulgaris",
+    "image_url": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb",
+    "description": "Legume, produces pods.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seeds absorb water, root emerges."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-25",
+        "title": "Seedling",
+        "description": "First leaves, stem elongates."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "25-45",
+        "title": "Vegetative",
+        "description": "Vines or bush grows, leaves multiply."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "45-60",
+        "title": "Flowering",
+        "description": "White or purple flowers appear."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "60-80",
+        "title": "Pod Development",
+        "description": "Pods form and fill with beans."
+      },
+      {
+        "stage_id": 6,
+        "day_range": "80-100",
+        "title": "Harvest",
+        "description": "Pods ready for picking."
+      }
+    ]
+  },
+  {
+    "id": 7,
+    "name": "Pea",
+    "scientific_name": "Pisum sativum",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Cool\u2011season legume, sweet pods.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seeds swell, root and shoot emerge."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-30",
+        "title": "Seedling",
+        "description": "Tendrils develop, plant climbs."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "30-50",
+        "title": "Flowering",
+        "description": "White flowers bloom."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "50-70",
+        "title": "Pod Formation",
+        "description": "Pods swell with peas."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "70-90",
+        "title": "Harvest",
+        "description": "Pods plump, ready to pick."
+      }
+    ]
+  },
+  {
+    "id": 8,
+    "name": "Zucchini",
+    "scientific_name": "Cucurbita pepo",
+    "image_url": "https://images.unsplash.com/photo-1622206151226-18ca2c9ab4a1",
+    "description": "Summer squash, prolific producer.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seeds sprout in warm soil."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-30",
+        "title": "Seedling",
+        "description": "Large cotyledons, true leaves appear."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "30-60",
+        "title": "Vegetative",
+        "description": "Vines spread, leaves enlarge."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "60-80",
+        "title": "Flowering",
+        "description": "Large yellow flowers bloom."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "80-100",
+        "title": "Fruiting",
+        "description": "Fruits grow rapidly, harvest young."
+      }
+    ]
+  },
+  {
+    "id": 9,
+    "name": "Radish",
+    "scientific_name": "Raphanus sativus",
+    "image_url": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea",
+    "description": "Fast\u2011growing root vegetable.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-5",
+        "title": "Germination",
+        "description": "Seeds sprout within days."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "5-15",
+        "title": "Seedling",
+        "description": "True leaves develop, root thickens."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "15-30",
+        "title": "Root Swelling",
+        "description": "Edible radish forms underground."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "30-45",
+        "title": "Harvest",
+        "description": "Radish reaches 1 inch diameter."
+      }
+    ]
+  },
+  {
+    "id": 10,
+    "name": "Broccoli",
+    "scientific_name": "Brassica oleracea",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Cool\u2011season vegetable with heads.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seeds sprout, cotyledons appear."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-30",
+        "title": "Seedling",
+        "description": "True leaves develop."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "30-60",
+        "title": "Vegetative",
+        "description": "Leaves grow, plant establishes."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "60-90",
+        "title": "Head Formation",
+        "description": "Central head develops."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "90-120",
+        "title": "Harvest",
+        "description": "Head firm, before flowering."
+      }
+    ]
+  },
+  {
+    "id": 11,
+    "name": "Potato",
+    "scientific_name": "Solanum tuberosum",
+    "image_url": "https://images.unsplash.com/photo-1518977676601-b53f82aba655",
+    "description": "Tuber crop, staple food.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-20",
+        "title": "Sprouting",
+        "description": "Seed potato eyes sprout."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "20-40",
+        "title": "Emergence",
+        "description": "Shoots break soil surface."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "40-70",
+        "title": "Vegetative",
+        "description": "Foliage grows, tubers initiate."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "70-100",
+        "title": "Tuber Bulking",
+        "description": "Tubers enlarge underground."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "100-120",
+        "title": "Maturity",
+        "description": "Foliage yellows, tubers ready."
+      }
+    ]
+  },
+  {
+    "id": 12,
+    "name": "Onion",
+    "scientific_name": "Allium cepa",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Bulb vegetable, pungent flavor.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination",
+        "description": "Seeds sprout, slender shoots."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-40",
+        "title": "Seedling",
+        "description": "Leaves elongate, bulb begins to form."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "40-80",
+        "title": "Bulb Development",
+        "description": "Bulb swells, layers accumulate."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "80-120",
+        "title": "Maturation",
+        "description": "Tops fall over, bulb cures."
+      }
+    ]
+  },
+  {
+    "id": 13,
+    "name": "Strawberry",
+    "scientific_name": "Fragaria \u00d7 ananassa",
+    "image_url": "https://images.unsplash.com/photo-1601004890684-d8cbf643f5f2",
+    "description": "Perennial, produces sweet red berries.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-14",
+        "title": "Germination",
+        "description": "Tiny seeds sprout (if from seed)."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "14-60",
+        "title": "Seedling/Runner",
+        "description": "Plant establishes, runners may form."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "60-90",
+        "title": "Flowering",
+        "description": "White flowers appear."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "90-120",
+        "title": "Fruit Set",
+        "description": "Green berries form."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "120-150",
+        "title": "Ripening",
+        "description": "Berries turn red, sweeten."
+      }
+    ]
+  },
+  {
+    "id": 14,
+    "name": "Raspberry",
+    "scientific_name": "Rubus idaeus",
+    "image_url": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb",
+    "description": "Cane fruit, summer\u2011bearing.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-30",
+        "title": "Establishment",
+        "description": "Roots develop, canes emerge."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "30-90",
+        "title": "Vegetative Growth",
+        "description": "Canes grow tall, leaves expand."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "90-150",
+        "title": "Flowering",
+        "description": "Small white flowers bloom."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "150-180",
+        "title": "Fruiting",
+        "description": "Berries ripen to red/black."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "180-240",
+        "title": "Dormancy",
+        "description": "Canes die back, plant rests."
+      }
+    ]
+  },
+  {
+    "id": 15,
+    "name": "Blueberry",
+    "scientific_name": "Vaccinium corymbosum",
+    "image_url": "https://images.unsplash.com/photo-1598170845058-78131a90f4bf",
+    "description": "Acid\u2011loving shrub, antioxidant berries.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-30",
+        "title": "Establishment",
+        "description": "Roots settle, new shoots."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "30-120",
+        "title": "Vegetative",
+        "description": "Bush grows, leaves mature."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "120-180",
+        "title": "Flowering",
+        "description": "Small bell\u2011shaped white flowers."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "180-240",
+        "title": "Fruit Development",
+        "description": "Green berries turn blue."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "240-300",
+        "title": "Harvest",
+        "description": "Berries sweet, fully colored."
+      }
+    ]
+  },
+  {
+    "id": 16,
+    "name": "Fig",
+    "scientific_name": "Ficus carica",
+    "image_url": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb",
+    "description": "Mediterranean tree, sweet fruit.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-30",
+        "title": "Planting",
+        "description": "Tree establishes roots."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "30-180",
+        "title": "Vegetative",
+        "description": "Leaves expand, branches grow."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "180-240",
+        "title": "Fruit Initiation",
+        "description": "Small figs form."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "240-300",
+        "title": "Fruit Swelling",
+        "description": "Figs enlarge, soften."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "300-360",
+        "title": "Ripening",
+        "description": "Fruits sweet, skin may split."
+      }
+    ]
+  },
+  {
+    "id": 17,
+    "name": "Lemon",
+    "scientific_name": "Citrus \u00d7 limon",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Citrus tree, acidic yellow fruit.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-60",
+        "title": "Seedling",
+        "description": "From seed: slow germination."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "60-365",
+        "title": "Juvenile",
+        "description": "Tree grows, develops thorns."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "365-730",
+        "title": "Flowering",
+        "description": "Fragrant white blossoms."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "730-1095",
+        "title": "Fruit Set",
+        "description": "Small green lemons appear."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "1095-1460",
+        "title": "Maturation",
+        "description": "Fruits turn yellow, juicy."
+      }
+    ]
+  },
+  {
+    "id": 18,
+    "name": "Grape",
+    "scientific_name": "Vitis vinifera",
+    "image_url": "https://images.unsplash.com/photo-1518977676601-b53f82aba655",
+    "description": "Vine fruit for eating or wine.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-30",
+        "title": "Dormant Cutting",
+        "description": "Cutting roots, buds swell."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "30-90",
+        "title": "Bud Break",
+        "description": "New shoots and leaves emerge."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "90-150",
+        "title": "Flowering",
+        "description": "Tiny flowers in clusters."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "150-210",
+        "title": "Fruit Set",
+        "description": "Grape berries form."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "210-270",
+        "title": "Veraison",
+        "description": "Berries change color, sweeten."
+      }
+    ]
+  },
+  {
+    "id": 19,
+    "name": "Basil",
+    "scientific_name": "Ocimum basilicum",
+    "image_url": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea",
+    "description": "Aromatic herb for Italian dishes.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-7",
+        "title": "Germination",
+        "description": "Seeds sprout in warm soil."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "7-21",
+        "title": "Seedling",
+        "description": "True leaves appear, aroma develops."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "21-45",
+        "title": "Vegetative",
+        "description": "Bushy growth, frequent harvesting."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "45-60",
+        "title": "Flowering",
+        "description": "White flowers (pinch to delay)."
+      }
+    ]
+  },
+  {
+    "id": 20,
+    "name": "Mint",
+    "scientific_name": "Mentha spp.",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Spreading herb, refreshing flavor.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-10",
+        "title": "Germination/Rooting",
+        "description": "Seeds or cuttings establish."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "10-30",
+        "title": "Establishment",
+        "description": "Runners spread, leaves multiply."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "30-60",
+        "title": "Vegetative",
+        "description": "Lush foliage, can be invasive."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "60-90",
+        "title": "Flowering",
+        "description": "Small purple/white flowers."
+      }
+    ]
+  },
+  {
+    "id": 21,
+    "name": "Rosemary",
+    "scientific_name": "Salvia rosmarinus",
+    "image_url": "https://images.unsplash.com/photo-1518977676601-b53f82aba655",
+    "description": "Woody perennial, pine\u2011like aroma.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-30",
+        "title": "Propagation",
+        "description": "Cutting roots slowly."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "30-180",
+        "title": "Establishment",
+        "description": "Shrub develops woody stems."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "180-365",
+        "title": "Vegetative",
+        "description": "Needle\u2011like leaves, bushy shape."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "365-730",
+        "title": "Flowering",
+        "description": "Small blue flowers in spring."
+      }
+    ]
+  },
+  {
+    "id": 22,
+    "name": "Thyme",
+    "scientific_name": "Thymus vulgaris",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Low\u2011growing herb, earthy flavor.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-14",
+        "title": "Germination",
+        "description": "Tiny seeds sprout slowly."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "14-60",
+        "title": "Seedling",
+        "description": "Small leaves, creeping habit."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "60-180",
+        "title": "Mat Formation",
+        "description": "Spreads into a dense mat."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "180-270",
+        "title": "Flowering",
+        "description": "Tiny pink/purple flowers."
+      }
+    ]
+  },
+  {
+    "id": 23,
+    "name": "Parsley",
+    "scientific_name": "Petroselinum crispum",
+    "image_url": "https://images.unsplash.com/photo-1598170845058-78131a90f4bf",
+    "description": "Biennial herb, rich in vitamins.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-21",
+        "title": "Germination",
+        "description": "Slow germination, up to 3 weeks."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "21-60",
+        "title": "Seedling",
+        "description": "True leaves, rosette forms."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "60-120",
+        "title": "Vegetative",
+        "description": "Leaves expand, harvest continuously."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "120-180",
+        "title": "Bolting",
+        "description": "Second year: flower stalk emerges."
+      }
+    ]
+  },
+  {
+    "id": 24,
+    "name": "Apple Tree",
+    "scientific_name": "Malus domestica",
+    "image_url": "https://images.unsplash.com/photo-1568702846914-96b305d2aaeb",
+    "description": "Deciduous fruit tree, requires chilling.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-365",
+        "title": "Sapling",
+        "description": "Young tree establishes roots."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "365-1095",
+        "title": "Juvenile",
+        "description": "Vegetative growth, no fruit yet."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "1095-1825",
+        "title": "Flowering",
+        "description": "Spring blossoms, pollination needed."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "1825-2555",
+        "title": "Fruit Set",
+        "description": "Small apples form after flowering."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "2555-3285",
+        "title": "Fruit Maturation",
+        "description": "Apples enlarge, color develops."
+      },
+      {
+        "stage_id": 6,
+        "day_range": "3285-4015",
+        "title": "Harvest",
+        "description": "Apples ripe, ready for picking."
+      }
+    ]
+  },
+  {
+    "id": 25,
+    "name": "Orange Tree",
+    "scientific_name": "Citrus \u00d7 sinensis",
+    "image_url": "https://images.unsplash.com/photo-1583339793403-3d9b001b6008",
+    "description": "Evergreen citrus, sweet fruit.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-365",
+        "title": "Sapling",
+        "description": "Tree establishes, may have thorns."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "365-1095",
+        "title": "Juvenile",
+        "description": "Leaves darken, canopy fills."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "1095-1825",
+        "title": "Flowering",
+        "description": "Fragrant white blossoms."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "1825-2555",
+        "title": "Fruit Development",
+        "description": "Green oranges grow slowly."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "2555-3285",
+        "title": "Ripening",
+        "description": "Fruits turn orange, sweeten."
+      }
+    ]
+  },
+  {
+    "id": 26,
+    "name": "Olive Tree",
+    "scientific_name": "Olea europaea",
+    "image_url": "https://images.unsplash.com/photo-1518977676601-b53f82aba655",
+    "description": "Mediterranean evergreen, oil\u2011rich fruit.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-365",
+        "title": "Establishment",
+        "description": "Slow\u2011growing, drought\u2011tolerant."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "365-1825",
+        "title": "Juvenile",
+        "description": "Silvery leaves, woody trunk."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "1825-3650",
+        "title": "Flowering",
+        "description": "Small cream\u2011colored flowers."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "3650-5475",
+        "title": "Fruit Set",
+        "description": "Green olives form."
+      },
+      {
+        "stage_id": 5,
+        "day_range": "5475-7300",
+        "title": "Maturation",
+        "description": "Olives turn black, oil content peaks."
+      }
+    ]
+  },
+  {
+    "id": 27,
+    "name": "Maple Tree",
+    "scientific_name": "Acer spp.",
+    "image_url": "https://images.unsplash.com/photo-1592924357228-91a4daadcfea",
+    "description": "Deciduous ornamental, famous for fall color.",
+    "stages": [
+      {
+        "stage_id": 1,
+        "day_range": "0-365",
+        "title": "Seedling",
+        "description": "Germinates from winged samara."
+      },
+      {
+        "stage_id": 2,
+        "day_range": "365-1825",
+        "title": "Sapling",
+        "description": "Rapid height growth, leaf expansion."
+      },
+      {
+        "stage_id": 3,
+        "day_range": "1825-3650",
+        "title": "Young Tree",
+        "description": "Canopy broadens, bark thickens."
+      },
+      {
+        "stage_id": 4,
+        "day_range": "3650-7300",
+        "title": "Maturity",
+        "description": "Full size, annual seed production."
+      }
+    ]
+  }
+]
