@@ -1,0 +1,47 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # Allows manual triggering
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.13.0'
+        cache: true
+
+    - name: Install dependencies
+      run: flutter pub get
+
+    - name: Build APK
+      run: flutter build apk --release
+
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: plant-growth-tracker-apk
+        path: build/app/outputs/flutter-apk/app-release.apk
+        retention-days: 7
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: github.event_name == 'workflow_dispatch'  # Only on manual trigger
+      with:
+        tag_name: apk-${{ github.run_number }}
+        name: APK Build ${{ github.run_number }}
+        body: |
+          APK built from commit ${{ github.sha }}
+          - Date: ${{ github.event.head_commit.timestamp }}
+          - Triggered by: ${{ github.actor }}
+        draft: false
+        prerelease: false
+        files: |
+          build/app/outputs/flutter-apk/app-release.apk
