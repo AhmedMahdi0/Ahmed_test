@@ -58,6 +58,7 @@ class Task:
     kwargs: dict = field(default_factory=dict)
     callback: Optional[Callable] = None
     error_callback: Optional[Callable] = None
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
 
 class TaskWorker(threading.Thread):
@@ -92,6 +93,8 @@ class TaskWorker(threading.Thread):
         """Execute a single task."""
         with self.results_lock:
             if task.id in self.results:
+                if self.results[task.id].status == TaskStatus.CANCELLED:
+                    return
                 self.results[task.id].status = TaskStatus.RUNNING
                 self.results[task.id].started_at = datetime.now()
         
@@ -108,6 +111,8 @@ class TaskWorker(threading.Thread):
             sig = inspect.signature(task.func)
             if 'progress_callback' in sig.parameters:
                 task.kwargs['progress_callback'] = report_progress
+            if 'cancel_event' in sig.parameters:
+                task.kwargs['cancel_event'] = task.cancel_event
             
             # Execute the task
             result = task.func(*task.args, **task.kwargs)
@@ -127,6 +132,13 @@ class TaskWorker(threading.Thread):
                     logger.error(f"Task callback error: {e}")
         
         except Exception as e:
+            if task.cancel_event.is_set():
+                logger.info(f"Task {task.id} cancelled")
+                with self.results_lock:
+                    self.results[task.id].status = TaskStatus.CANCELLED
+                    self.results[task.id].completed_at = datetime.now()
+                return
+
             logger.error(f"Task {task.id} failed: {e}")
             
             with self.results_lock:
@@ -151,7 +163,7 @@ class TaskManager:
     Provides a simple thread-pool based task execution system.
     """
     
-    def __init__(self, num_workers: int = 4):
+    def __init__(self, num_workers: int = 2):
         self.task_queue: queue.Queue = queue.Queue()
         self.results: Dict[str, TaskResult] = {}
         self.results_lock = threading.Lock()
@@ -159,6 +171,7 @@ class TaskManager:
         self.num_workers = num_workers
         self._started = False
         self._cancelled_tasks: set = set()
+        self._tasks: Dict[str, Task] = {}
     
     def start(self):
         """Start the worker threads."""
@@ -224,6 +237,8 @@ class TaskManager:
             error_callback=error_callback
         )
         
+        with self.results_lock:
+            self._tasks[task_id] = task
         self.task_queue.put(task)
         logger.info(f"Task {task_id} submitted")
         
@@ -236,19 +251,25 @@ class TaskManager:
     
     def cancel(self, task_id: str) -> bool:
         """
-        Cancel a pending task.
-        Note: Cannot cancel already running tasks.
+        Cancel a task. Pending tasks are skipped; running tasks are signalled
+        through their cancel_event and stop at their next checkpoint.
         
         Returns:
-            True if task was cancelled.
+            True if the task was cancelled or asked to stop.
         """
         with self.results_lock:
-            if task_id in self.results:
-                result = self.results[task_id]
-                if result.status == TaskStatus.PENDING:
-                    result.status = TaskStatus.CANCELLED
-                    self._cancelled_tasks.add(task_id)
-                    return True
+            result = self.results.get(task_id)
+            task = self._tasks.get(task_id)
+            if result is None or task is None:
+                return False
+            if result.status == TaskStatus.PENDING:
+                result.status = TaskStatus.CANCELLED
+                self._cancelled_tasks.add(task_id)
+                task.cancel_event.set()
+                return True
+            if result.status == TaskStatus.RUNNING:
+                task.cancel_event.set()
+                return True
         return False
     
     def cleanup_old_results(self, max_age_seconds: int = 3600):
@@ -265,6 +286,7 @@ class TaskManager:
             
             for task_id in to_remove:
                 del self.results[task_id]
+                self._tasks.pop(task_id, None)
             
             return len(to_remove)
 

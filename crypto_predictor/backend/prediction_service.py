@@ -1,451 +1,409 @@
 """
 Prediction service for CryptoPredictor.
-Orchestrates data fetching, feature engineering, and model predictions.
+
+For each requested timeframe it:
+  1. fetches candles (+ BTC and macro context),
+  2. builds leakage-free features and direction labels,
+  3. runs walk-forward evaluation of every selected model, the ensemble and
+     naive baselines, plus a backtest,
+  4. refits the models on all labelled data and predicts the direction of
+     the next candle (the "signal").
 """
 
+import io
+import json
 import logging
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+import threading
+import time
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-import torch
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-from .config import get_config
+from .config import get_config, get_timeframe, TIMEFRAMES, DEFAULT_MODELS
 from .data_fetcher import CryptoDataFetcher
-from .feature_engineering import FeatureEngineer
-from .models import ModelManager
+from .evaluation import (walk_forward_splits, split_train_val, classification_metrics,
+                         baseline_probas, backtest)
+from .feature_engineering import FeatureEngineer, Dataset
+from .models import (create_model, save_model, load_model, available_models, ensemble_proba,
+                     MODEL_INFO, GBMModel)
 
 logger = logging.getLogger(__name__)
 
+HISTORY_POINTS = 300
+MIN_LABELLED_ROWS = 400
+
+
+class AnalysisCancelled(Exception):
+    """Raised when the caller cancels a running analysis."""
+
+
+def _iso(ts) -> str:
+    return pd.Timestamp(ts).isoformat() + 'Z'
+
+
+def _round(value, digits=4):
+    if value is None:
+        return None
+    value = float(value)
+    return None if np.isnan(value) else round(value, digits)
+
 
 class PredictionService:
-    """Main service for cryptocurrency price predictions."""
-    
-    def __init__(self):
-        self.config = get_config()
-        self.data_fetcher = CryptoDataFetcher()
-        self.feature_engineer = FeatureEngineer()
-        self.model_manager = ModelManager()
-        self.data: Optional[pd.DataFrame] = None
-        self.processed_data: Optional[pd.DataFrame] = None
-    
-    def fetch_and_prepare_data(self, 
-                                 target_symbol: Optional[str] = None,
-                                 force_refresh: bool = False) -> pd.DataFrame:
-        """
-        Fetch data and prepare features for a specific cryptocurrency.
-        
-        Args:
-            target_symbol: Symbol of crypto to fetch (e.g., 'BTC'). If None, fetches all.
-            force_refresh: Force re-fetching data even if cached.
-            
-        Returns:
-            Processed DataFrame with all features.
-        """
-        # Check if we already have data for this symbol
-        if self.processed_data is not None and not force_refresh:
-            if target_symbol is None:
-                logger.info("Using cached processed data (all cryptos)")
-                return self.processed_data
-            # Check if the target symbol exists in cached data
-            price_col = f"{target_symbol}_Price"
-            if price_col in self.processed_data.columns:
-                logger.info(f"Using cached processed data for {target_symbol}")
-                return self.processed_data
-        
-        logger.info(f"Fetching and preparing data for {target_symbol or 'all cryptos'}...")
-        
-        # Fetch raw data - only the target symbol if specified
-        symbols = [target_symbol] if target_symbol else None
-        self.data = self.data_fetcher.fetch_all_data(symbols=symbols)
-        
-        # Process features
-        self.processed_data = self.feature_engineer.process_data(self.data)
-        
-        return self.processed_data
-    
-    def train_models(self, 
-                     target_symbol: str,
-                     model_types: Optional[List[str]] = None) -> Dict:
-        """
-        Train models for a specific cryptocurrency.
-        
-        Args:
-            target_symbol: Symbol of crypto to predict (e.g., 'BTC').
-            model_types: List of model types to train. If None, trains all.
-            
-        Returns:
-            Dictionary with training results.
-        """
-        if self.processed_data is None:
-            self.fetch_and_prepare_data()
-        
-        # Prepare features for target
-        X, y = self.feature_engineer.prepare_features(self.processed_data, target_symbol)
-        
-        # Prepare data for training (pass pandas objects to preserve indexing)
-        data = self.model_manager.prepare_data(
-            X, 
-            y,
-            train_ratio=self.config.app_config.train_test_split
-        )
-        
-        # Train models
-        if model_types is None:
-            self.model_manager.train_all_models(data)
-        else:
-            for model_type in model_types:
-                self.model_manager.train_model(model_type, data)
-        
-        return {
-            'target_symbol': target_symbol,
-            'models_trained': list(self.model_manager.models.keys()),
-            'train_size': data['train_size'],
-            'test_size': len(X) - data['train_size']
-        }
-    
-    def get_predictions(self, 
-                        target_symbol: str,
-                        include_confidence: bool = True) -> Dict:
-        """
-        Get predictions for a cryptocurrency.
-        
-        Args:
-            target_symbol: Symbol to predict.
-            include_confidence: Whether to include confidence intervals.
-            
-        Returns:
-            Dictionary with predictions and metadata.
-        """
-        if not self.model_manager.models:
-            raise ValueError("No models trained. Call train_models() first.")
-        
-        if self.processed_data is None:
-            self.fetch_and_prepare_data()
-        
-        # Prepare test data (pass pandas objects so prepare_data can preserve indices)
-        X, y = self.feature_engineer.prepare_features(self.processed_data, target_symbol)
-        data = self.model_manager.prepare_data(X, y)
-        
-        # Get predictions from all models
-        predictions = {}
-        for model_type in self.model_manager.models:
-            pred = self.model_manager.predict(model_type, data['X_test'], inverse_transform=True)
-            predictions[model_type] = pred.flatten()
-        
-        # Get actual values
-        y_actual = self.model_manager.scalers['y'].inverse_transform(
-            data['y_test'].cpu().numpy()
-        ).flatten()
-        
-        # Get dates for test period
-        train_size = data['train_size']
-        test_dates = self.processed_data.index[train_size:].tolist()
-        
-        result = {
-            'target_symbol': target_symbol,
-            'dates': test_dates,
-            'actual': y_actual,
-            'predictions': predictions
-        }
-        
-        if include_confidence:
-            result['confidence_intervals'] = self._calculate_confidence_intervals(
-                y_actual, predictions
-            )
-        
-        return result
-    
-    def _calculate_confidence_intervals(self, 
-                                        y_actual: np.ndarray, 
-                                        predictions: Dict[str, np.ndarray],
-                                        confidence: float = 0.95) -> Dict:
-        """Calculate confidence intervals for predictions."""
-        z_score = 1.96 if confidence == 0.95 else 2.576  # 95% or 99%
-        
-        intervals = {}
-        for model_type, pred in predictions.items():
-            errors = y_actual - pred
-            std_dev = np.std(errors)
-            margin = z_score * std_dev
-            intervals[model_type] = {
-                'lower': pred - margin,
-                'upper': pred + margin,
-                'std_dev': std_dev
-            }
-        
-        return intervals
-    
-    def evaluate_models(self, target_symbol: str) -> pd.DataFrame:
-        """
-        Evaluate model performance with various metrics.
-        
-        Args:
-            target_symbol: Symbol to evaluate.
-            
-        Returns:
-            DataFrame with evaluation metrics.
-        """
-        results = self.get_predictions(target_symbol, include_confidence=False)
-        y_actual = results['actual']
-        
-        metrics = {}
-        for model_type, pred in results['predictions'].items():
-            mse = mean_squared_error(y_actual, pred)
-            metrics[model_type] = {
-                'MSE': mse,
-                'RMSE': np.sqrt(mse),
-                'MAE': mean_absolute_error(y_actual, pred),
-                'MAPE': np.mean(np.abs((y_actual - pred) / y_actual)) * 100
-            }
-        
-        return pd.DataFrame(metrics).T.round(3)
-    
-    def get_future_predictions(self, 
-                               target_symbol: str,
-                               days_ahead: int = 3) -> pd.DataFrame:
-        """
-        Get predictions including future days using autoregressive prediction.
-        
-        Args:
-            target_symbol: Symbol to predict.
-            days_ahead: Number of days to predict ahead.
-            
-        Returns:
-            DataFrame with predictions and confidence intervals.
-        """
-        if not self.model_manager.models:
-            raise ValueError("Models not trained. Train models first.")
-        
-        if self.processed_data is None:
-            self.fetch_and_prepare_data()
-        
-        # Get current predictions for historical context
-        predictions = self.get_predictions(target_symbol)
-        
-        # Get the last row of features for autoregressive prediction
-        X, y = self.feature_engineer.prepare_features(self.processed_data, target_symbol)
+    """Runs analyses and keeps the latest trained models per (symbol, timeframe)."""
 
-        # Ensure features are pandas-like so `.iloc` and `.columns` work
-        # If prepare_features returned numpy arrays, convert them to DataFrame/Series
-        if not hasattr(X, 'iloc'):
-            X = pd.DataFrame(X)
-        if not hasattr(y, 'iloc'):
-            y = pd.Series(np.asarray(y).flatten())
-        
-        # Get the current/last known price from the raw data (like notebook does with y)
-        price_col = f'{target_symbol}_Price'
-        last_known_price = None
-        if price_col in self.processed_data.columns:
-            col_series = self.processed_data[price_col]
-            last_known_price = float(col_series.iloc[-1] if hasattr(col_series, 'iloc') else col_series[-1])
-        
-        # Prepare result DataFrame
-        result_data = []
-        
-        # Add last 7 historical days (model predictions only, no "actual")
-        for i in range(-7, 0):
-            idx = len(predictions['dates']) + i
-            if idx >= 0:
-                row_date = predictions['dates'][idx]
-                row = {
-                    'date': row_date,
-                    'type': 'historical'
-                }
-                
-                for model, pred in predictions['predictions'].items():
-                    row[model] = float(pred[idx]) if pred[idx] is not None and not np.isnan(pred[idx]) else None
-                    if 'confidence_intervals' in predictions:
-                        ci = predictions['confidence_intervals'][model]
-                        row[f'{model}_lower'] = float(ci['lower'][idx])
-                        row[f'{model}_upper'] = float(ci['upper'][idx])
-                result_data.append(row)
-        
-        # Add the last known actual price as a separate field in the response
-        # This will be returned at the top level, not in each row
-        
-        # Autoregressive future predictions
-        # Start with the last known features
-        # Ensure last_features is a DataFrame-like object; handle numpy arrays defensively
-        import pandas as pd
-        if hasattr(X, 'iloc'):
-            last_features = X.iloc[-1:].copy()
-        else:
-            # convert last row to DataFrame with generic column names if none available
-            cols = X.columns if hasattr(X, 'columns') else [f'col{i}' for i in range(X.shape[1])]
-            last_features = pd.DataFrame(X[-1:], columns=cols)
-        last_date = predictions['dates'][-1]
-        
-        # Get price lag column names for the target
-        price_lag_cols = [f'{target_symbol}_Price_lag{i}' for i in range(1, 8)]
-        price_lag_cols = [col for col in price_lag_cols if col in X.columns]
-        
-        # Store predictions from each model to use for rolling
-        model_predictions = {model: [] for model in self.model_manager.models}
-        
-        # Get the scaler for transforming features
-        scaler_X = self.model_manager.scalers.get('X')
-        scaler_y = self.model_manager.scalers.get('y')
-        
-        for day in range(days_ahead):
-            future_date = last_date + timedelta(days=day + 1)
-            row = {
-                'date': future_date,
-                'type': 'forecast'
-            }
-            
-            # Scale the current features
-            features_scaled = scaler_X.transform(last_features.values)
-            features_tensor = torch.tensor(features_scaled, dtype=torch.float32).to(self.model_manager.device)
-            
-            # Get predictions from all models
-            day_predictions = []
-            for model_type, model in self.model_manager.models.items():
-                model.eval()
-                with torch.no_grad():
-                    pred_scaled = model(features_tensor).cpu().numpy()
-                    pred = scaler_y.inverse_transform(pred_scaled).flatten()[0]
-                    row[model_type] = pred
-                    model_predictions[model_type].append(pred)
-                    day_predictions.append(pred)
-            
-            # Calculate ensemble prediction (average of all models)
-            ensemble_pred = np.mean(day_predictions)
-            
-            # Add confidence intervals based on model variance
-            std_dev = np.std(day_predictions)
-            for model_type in self.model_manager.models:
-                row[f'{model_type}_lower'] = row[model_type] - 1.96 * std_dev
-                row[f'{model_type}_upper'] = row[model_type] + 1.96 * std_dev
-            
-            result_data.append(row)
-            
-            # Update features for next day prediction (autoregressive step)
-            # Shift price lags: lag1 <- predicted, lag2 <- lag1, etc.
-            if price_lag_cols:
-                new_features = last_features.copy()
-                
-                # Shift existing lags
-                for i in range(len(price_lag_cols) - 1, 0, -1):
-                    col_current = f'{target_symbol}_Price_lag{i}'
-                    col_prev = f'{target_symbol}_Price_lag{i+1}'
-                    if col_current in new_features.columns and col_prev in new_features.columns:
-                        new_features[col_prev] = new_features[col_current].values
-                
-                # Set lag1 to the ensemble predicted price
-                lag1_col = f'{target_symbol}_Price_lag1'
-                if lag1_col in new_features.columns:
-                    new_features[lag1_col] = ensemble_pred
-                
-                last_features = new_features
-        
-        # Return DataFrame and current price
-        return pd.DataFrame(result_data), last_known_price
-    
-    def classify_price_change(self, 
-                              true_price: float, 
-                              predicted_price: float) -> int:
-        """
-        Classify predicted price change into categories.
-        
-        Args:
-            true_price: True price at time t.
-            predicted_price: Predicted price at time t+1.
-            
-        Returns:
-            Category from -7 to 7.
-        """
-        if true_price == 0:
-            return -7 if predicted_price == 0 else 0
-        
-        pct_change = ((predicted_price - true_price) / true_price) * 100
-        
-        if -2 < pct_change < 2: return 0
-        elif 2 <= pct_change < 5: return 1
-        elif 5 <= pct_change < 10: return 2
-        elif 10 <= pct_change < 20: return 3
-        elif 20 <= pct_change < 40: return 4
-        elif 40 <= pct_change < 60: return 5
-        elif 60 <= pct_change < 100: return 6
-        elif pct_change >= 100: return 7
-        elif -5 < pct_change <= -2: return -1
-        elif -10 < pct_change <= -5: return -2
-        elif -20 < pct_change <= -10: return -3
-        elif -40 < pct_change <= -20: return -4
-        elif -60 < pct_change <= -40: return -5
-        elif -100 < pct_change <= -60: return -6
-        else: return -7
-    
-    def get_category_names(self) -> Dict[int, str]:
-        """Get mapping of category numbers to names."""
-        return {
-            -7: "<= -100%",
-            -6: "-100% to -60%",
-            -5: "-60% to -40%",
-            -4: "-40% to -20%",
-            -3: "-20% to -10%",
-            -2: "-10% to -5%",
-            -1: "-5% to -2%",
-            0: "-2% to 2%",
-            1: "2% to 5%",
-            2: "5% to 10%",
-            3: "10% to 20%",
-            4: "20% to 40%",
-            5: "40% to 60%",
-            6: "60% to 100%",
-            7: ">=100%"
-        }
-    
-    def save_results(self, 
-                     target_symbol: str,
-                     filename: Optional[str] = None) -> str:
-        """
-        Save prediction results to CSV.
-        
-        Args:
-            target_symbol: Symbol predicted.
-            filename: Output filename. Auto-generated if None.
-            
-        Returns:
-            Path to saved file.
-        """
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{target_symbol}_predictions_{timestamp}.csv"
-        
-        predictions_df = self.get_future_predictions(target_symbol)
-        output_path = self.config.get_output_path(filename)
-        predictions_df.to_csv(output_path, index=False)
-        
-        logger.info(f"Results saved to {output_path}")
-        return output_path
-    
-    def save_models(self) -> str:
-        """Save trained models to disk."""
-        models_dir = self.config.get_output_path("models")
-        self.model_manager.save_models(models_dir)
-        return models_dir
-    
-    def load_models(self, input_dim: int = None) -> None:
-        """Load trained models from disk."""
-        models_dir = self.config.get_output_path("models")
-        self.model_manager.load_models(models_dir, input_dim)
-    
+    def __init__(self, fetcher: Optional[CryptoDataFetcher] = None):
+        self.config = get_config()
+        self.fetcher = fetcher or CryptoDataFetcher()
+        self.features = FeatureEngineer()
+        self._lock = threading.Lock()
+        self.results: Dict[tuple, Dict] = {}      # (symbol, tf) -> analysis result (JSON-ready)
+        self.oos: Dict[tuple, pd.DataFrame] = {}  # (symbol, tf) -> out-of-sample predictions
+        self.bundles: Dict[tuple, Dict] = {}      # (symbol, tf) -> {'models': {...}, 'meta': {...}}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def analyze(self, symbol: str, timeframes: Optional[List[str]] = None, models: Optional[List[str]] = None,
+                progress_callback: Optional[Callable] = None, cancel_event: Optional[threading.Event] = None) -> Dict:
+        symbol = self.config.get_crypto(symbol).symbol
+        timeframes = timeframes or list(TIMEFRAMES)
+        for tf in timeframes:
+            get_timeframe(tf)
+        models = self._validate_models(models or DEFAULT_MODELS)
+
+        def report(fraction: float, message: str):
+            if progress_callback:
+                progress_callback(round(min(fraction, 0.99) * 100, 1), message)
+
+        def cancel_check():
+            if cancel_event is not None and cancel_event.is_set():
+                raise AnalysisCancelled("Analysis cancelled")
+
+        started = time.time()
+        out = {'symbol': symbol, 'generated_at': _iso(datetime.now(timezone.utc).replace(tzinfo=None)),
+               'models': models, 'timeframes': {}, 'errors': {}}
+        for i, tf in enumerate(timeframes):
+            share = 1.0 / len(timeframes)
+            sub = lambda f, m, i=i, tf=tf: report((i + f) * share, f"[{tf}] {m}")
+            try:
+                out['timeframes'][tf] = self._analyze_timeframe(symbol, tf, models, sub, cancel_check)
+            except AnalysisCancelled:
+                raise
+            except Exception as e:
+                logger.exception("Analysis failed for %s %s", symbol, tf)
+                out['errors'][tf] = str(e)
+        if not out['timeframes']:
+            raise ValueError(f"Analysis failed for every timeframe: {out['errors']}")
+        out['elapsed_seconds'] = round(time.time() - started, 1)
+        out['settings'] = self._settings_snapshot()
+        return out
+
+    def latest_signal(self, symbol: str, timeframes: Optional[List[str]] = None) -> Dict:
+        """Refresh candles and re-predict the next candle with already-trained models (no retraining)."""
+        symbol = self.config.get_crypto(symbol).symbol
+        timeframes = timeframes or list(TIMEFRAMES)
+        out = {'symbol': symbol, 'generated_at': _iso(datetime.now(timezone.utc).replace(tzinfo=None)),
+               'signals': {}, 'errors': {}}
+        for tf in timeframes:
+            try:
+                bundle = self._get_bundle(symbol, tf)
+                ds = self._dataset(symbol, tf)
+                if ds.classes != bundle['meta']['classes'] or ds.horizon != bundle['meta']['horizon']:
+                    raise ValueError("Label settings changed since training. Re-run the analysis.")
+                missing = [c for c in bundle['meta']['feature_columns'] if c not in ds.X.columns]
+                if missing:
+                    raise ValueError(f"Features changed since training ({missing[:3]}...). Re-run the analysis.")
+                X = ds.X[bundle['meta']['feature_columns']].to_numpy(dtype=np.float32)
+                out['signals'][tf] = self._signal(ds, X, bundle['models'], bundle['meta'].get('reliability'))
+            except Exception as e:
+                out['errors'][tf] = str(e)
+        return out
+
+    def get_result(self, symbol: str, timeframe: str) -> Optional[Dict]:
+        with self._lock:
+            return self.results.get((symbol.upper(), timeframe))
+
+    def export_csv(self, symbol: str, timeframe: str) -> str:
+        with self._lock:
+            df = self.oos.get((symbol.upper(), timeframe))
+        if df is None:
+            raise ValueError(f"No analysis for {symbol} {timeframe} yet")
+        buf = io.StringIO()
+        df.to_csv(buf, index_label='time')
+        return buf.getvalue()
+
     def get_available_cryptos(self) -> List[Dict]:
-        """Get list of available cryptocurrencies."""
-        return [
-            {
-                'symbol': c.symbol,
-                'name': c.name,
-                'ticker': c.ticker,
-                'enabled': c.enabled
-            }
-            for c in self.config.cryptocurrencies
-        ]
-    
-    def get_btc_dominance(self) -> Optional[float]:
-        """Get current BTC dominance."""
-        return self.data_fetcher.fetch_btc_dominance()
+        return [{'symbol': c.symbol, 'name': c.name, 'enabled': c.enabled} for c in self.config.cryptocurrencies]
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_models(models: List[str]) -> List[str]:
+        avail = available_models()
+        unknown = [m for m in models if m not in MODEL_INFO]
+        if unknown:
+            raise ValueError(f"Unknown models: {unknown}. Available: {list(MODEL_INFO)}")
+        usable = [m for m in models if avail[m]]
+        if not usable:
+            raise ValueError("None of the selected models is available (PyTorch missing?)")
+        return usable
+
+    def _dataset(self, symbol: str, tf: str) -> Dataset:
+        cfg = self.config.app_config
+        ohlcv = self.fetcher.fetch_ohlcv(symbol, tf)
+        btc = None
+        if cfg.use_btc_context and symbol != 'BTC':
+            try:
+                btc = self.fetcher.fetch_ohlcv('BTC', tf)
+            except Exception as e:
+                logger.warning("BTC context unavailable: %s", e)
+        macro = None
+        if cfg.use_macro:
+            try:
+                macro = self.fetcher.fetch_macro()
+            except Exception as e:
+                logger.warning("Macro context unavailable: %s", e)
+        ds = self.features.make_dataset(ohlcv, tf, btc=btc, macro=macro)
+        ds.X.attrs['source'] = ohlcv.attrs.get('source')
+        return ds
+
+    def _analyze_timeframe(self, symbol: str, tf: str, model_names: List[str], report, cancel_check) -> Dict:
+        cfg = self.config.app_config
+        spec = get_timeframe(tf)
+        report(0.02, 'Fetching candles...')
+        ds = self._dataset(symbol, tf)
+        cancel_check()
+
+        labelled = np.flatnonzero(ds.labeled_mask)
+        if len(labelled) < MIN_LABELLED_ROWS:
+            raise ValueError(f"Only {len(labelled)} labelled {tf} candles for {symbol}; need {MIN_LABELLED_ROWS}")
+        # Labelled rows are a contiguous prefix (only the last `horizon` rows lack a label).
+        n = labelled[-1] + 1
+        X = ds.X.to_numpy(dtype=np.float32)
+        y = ds.y.to_numpy(dtype=float)
+        fwd = ds.fwd_return.to_numpy()
+        next_ret = np.nan_to_num(ds.next_return.to_numpy())
+        persistence = ds.persistence.to_numpy()
+        n_classes = len(ds.classes)
+        purge = ds.horizon
+
+        splits = walk_forward_splits(n, cfg.walk_forward_splits, cfg.initial_train_frac, purge)
+        test_rows = np.concatenate([test for _, test in splits])
+        oos = {m: np.zeros((len(test_rows), n_classes)) for m in model_names}
+        base = {}
+        total_steps = len(splits) * len(model_names) + len(model_names)
+        step = 0
+
+        offset = 0
+        for k, (train_idx, test_idx) in enumerate(splits):
+            fit_idx, val_idx = split_train_val(train_idx, cfg.val_frac, purge)
+            for name in model_names:
+                cancel_check()
+                report(0.05 + 0.8 * step / total_steps, f"Walk-forward fold {k + 1}/{len(splits)}: {name}")
+                model = create_model(name, n_classes, tf).fit(X, y, fit_idx, val_idx, cancel_check=cancel_check)
+                oos[name][offset:offset + len(test_idx)] = model.predict_proba(X, test_idx)
+                step += 1
+            p = np.nan_to_num(persistence[test_idx], nan=1 if n_classes == 3 else 0)
+            for bname, bproba in baseline_probas(y[train_idx], p, len(test_idx), ds.classes).items():
+                base.setdefault(bname, []).append(bproba)
+            offset += len(test_idx)
+
+        oos['ensemble'] = ensemble_proba([oos[m] for m in model_names])
+        base = {k: np.concatenate(v) for k, v in base.items()}
+        y_test, fwd_test, next_test = y[test_rows], fwd[test_rows], next_ret[test_rows]
+
+        metrics = {name: classification_metrics(y_test, proba, ds.classes, fwd_test)
+                   for name, proba in {**oos, **base}.items()}
+        bt_kwargs = dict(classes=ds.classes, bars_per_year=spec.bars_per_year, fee_bps=cfg.fee_bps,
+                         min_confidence=cfg.min_confidence, allow_short=cfg.allow_short)
+        test_times = ds.X.index[test_rows]
+        bt = backtest(oos['ensemble'], next_test, **bt_kwargs)
+        bt['equity_curve']['time'] = [_iso(test_times[i]) for i in bt['equity_curve'].pop('index')]
+        for name in model_names:
+            metrics[name]['backtest_return'] = backtest(oos[name], next_test, **bt_kwargs)['total_return']
+
+        reliability = self._reliability(oos['ensemble'], y_test, fwd_test, ds.classes)
+
+        # Final models on all labelled rows -> live signal for the latest closed candle.
+        fit_idx, val_idx = split_train_val(np.arange(n), cfg.val_frac, purge)
+        final = {}
+        for name in model_names:
+            cancel_check()
+            report(0.05 + 0.8 * step / total_steps, f"Training final {name} model")
+            final[name] = create_model(name, n_classes, tf).fit(X, y, fit_idx, val_idx, cancel_check=cancel_check)
+            step += 1
+        report(0.95, 'Generating signal...')
+        signal = self._signal(ds, X, final, reliability)
+
+        meta = {
+            'symbol': symbol, 'timeframe': tf, 'classes': ds.classes, 'feature_columns': list(ds.X.columns),
+            'trained_at': _iso(datetime.now(timezone.utc).replace(tzinfo=None)), 'models': model_names,
+            'threshold': ds.threshold, 'horizon': ds.horizon, 'reliability': reliability,
+            'settings': self._settings_snapshot(),
+        }
+        self._save_bundle(symbol, tf, final, meta)
+
+        oos_df = pd.DataFrame(index=test_times)
+        oos_df['close'] = ds.close.to_numpy()[test_rows]
+        oos_df['fwd_log_return'] = fwd_test
+        oos_df['actual'] = [ds.classes[int(v)] for v in y_test]
+        for name in model_names + ['ensemble']:
+            oos_df[f'{name}_pred'] = [ds.classes[i] for i in oos[name].argmax(axis=1)]
+            for c, cname in enumerate(ds.classes):
+                oos_df[f'{name}_p_{cname}'] = oos[name][:, c].round(4)
+
+        result = {
+            'timeframe': tf,
+            'data': {
+                'source': ds.X.attrs.get('source'), 'candles': int(len(ds.X)), 'labelled': int(n),
+                'features': int(X.shape[1]), 'start': _iso(ds.X.index[0]), 'end': _iso(ds.X.index[-1]),
+                'test_start': _iso(test_times[0]), 'test_candles': int(len(test_rows)),
+                'class_balance': {c: _round((y_test == i).mean()) for i, c in enumerate(ds.classes)},
+            },
+            'label': {'mode': cfg.label_mode, 'classes': ds.classes, 'threshold': ds.threshold,
+                      'horizon': ds.horizon},
+            'signal': signal,
+            'metrics': metrics,
+            'backtest': bt,
+            'reliability': reliability,
+            'history': self._history(oos_df, ds.classes),
+            'feature_importance': self._importance(final.get('gbm'), list(ds.X.columns)),
+            'walk_forward': {'splits': len(splits), 'purge': purge},
+        }
+        with self._lock:
+            self.results[(symbol, tf)] = result
+            self.oos[(symbol, tf)] = oos_df
+        return result
+
+    def _signal(self, ds: Dataset, X: np.ndarray, models: Dict, reliability: Optional[Dict]) -> Dict:
+        spec = get_timeframe(ds.timeframe)
+        last = np.array([len(X) - 1])
+        per_model = {name: m.predict_proba(X, last)[0] for name, m in models.items()}
+        proba = np.mean(list(per_model.values()), axis=0)
+        pred = int(proba.argmax())
+        direction = ds.classes[pred]
+        votes = [ds.classes[int(p.argmax())] for p in per_model.values()]
+        agreement = votes.count(direction) / len(votes)
+        confidence = float(proba.max())
+        level = self._confidence_level(confidence, agreement, len(ds.classes))
+
+        candle_open = ds.X.index[-1]
+        candle_close = candle_open + pd.Timedelta(minutes=spec.minutes)
+        target = candle_close + pd.Timedelta(minutes=spec.minutes * ds.horizon)
+        signal = {
+            'direction': direction,
+            'probabilities': {c: _round(proba[i]) for i, c in enumerate(ds.classes)},
+            'confidence': _round(confidence),
+            'confidence_level': level,
+            'agreement': _round(agreement),
+            'models': {name: {'direction': ds.classes[int(p.argmax())],
+                              'probabilities': {c: _round(p[i]) for i, c in enumerate(ds.classes)}}
+                       for name, p in per_model.items()},
+            'price': _round(ds.close.iloc[-1], 8),
+            'candle_open': _iso(candle_open),
+            'based_on_close': _iso(candle_close),
+            'target_time': _iso(target),
+            'threshold': ds.threshold,
+        }
+        if reliability:
+            bucket = reliability.get(direction, {}).get(level)
+            signal['historical'] = bucket
+        return signal
+
+    @staticmethod
+    def _confidence_level(confidence: float, agreement: float, n_classes: int) -> str:
+        chance = 1.0 / n_classes
+        if confidence >= chance + 0.22 and agreement >= 0.99:
+            return 'high'
+        if confidence >= chance + 0.10 and agreement >= 0.5:
+            return 'medium'
+        return 'low'
+
+    def _reliability(self, proba: np.ndarray, y: np.ndarray, fwd: np.ndarray, classes: List[str]) -> Dict:
+        """How often past out-of-sample signals of each direction/confidence level were right."""
+        pred = proba.argmax(axis=1)
+        conf = proba.max(axis=1)
+        # Agreement is not tracked out-of-sample per row, so levels here use confidence alone.
+        levels = np.array([self._confidence_level(c, 1.0, len(classes)) for c in conf])
+        out = {}
+        for i, cname in enumerate(classes):
+            out[cname] = {}
+            for level in ('low', 'medium', 'high'):
+                mask = (pred == i) & (levels == level)
+                if not mask.any():
+                    out[cname][level] = {'n': 0, 'hit_rate': None, 'moved_that_way': None}
+                    continue
+                moved = None
+                if cname == 'up':
+                    moved = (fwd[mask] > 0).mean()
+                elif cname == 'down':
+                    moved = (fwd[mask] < 0).mean()
+                out[cname][level] = {'n': int(mask.sum()), 'hit_rate': _round((y[mask] == i).mean()),
+                                     'moved_that_way': _round(moved)}
+        return out
+
+    @staticmethod
+    def _history(oos_df: pd.DataFrame, classes: List[str]) -> Dict:
+        tail = oos_df.tail(HISTORY_POINTS)
+        return {
+            'time': [_iso(t) for t in tail.index],
+            'close': [_round(v, 8) for v in tail['close']],
+            'actual': tail['actual'].tolist(),
+            'predicted': tail['ensemble_pred'].tolist(),
+            'confidence': [_round(v) for v in tail[[f'ensemble_p_{c}' for c in classes]].max(axis=1)],
+        }
+
+    @staticmethod
+    def _importance(model, columns: List[str], top: int = 15) -> List[Dict]:
+        if not isinstance(model, GBMModel):
+            return []
+        imp = model.feature_importance()
+        if imp is None or imp.sum() == 0:
+            return []
+        imp = imp / imp.sum()
+        order = np.argsort(imp)[::-1][:top]
+        return [{'feature': columns[i], 'importance': _round(imp[i])} for i in order]
+
+    def _settings_snapshot(self) -> Dict:
+        return asdict(self.config.app_config)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def _bundle_dir(self, symbol: str, tf: str) -> Path:
+        return Path(self.config.get_output_path('models', f'{symbol}_{tf}', 'meta.json')).parent
+
+    def _save_bundle(self, symbol: str, tf: str, models: Dict, meta: Dict) -> None:
+        with self._lock:
+            self.bundles[(symbol, tf)] = {'models': models, 'meta': meta}
+        try:
+            directory = self._bundle_dir(symbol, tf)
+            for model in models.values():
+                save_model(model, directory)
+            (directory / 'meta.json').write_text(json.dumps(meta, indent=2, default=str))
+        except Exception as e:
+            logger.warning("Could not save models for %s %s: %s", symbol, tf, e)
+
+    def _get_bundle(self, symbol: str, tf: str) -> Dict:
+        with self._lock:
+            bundle = self.bundles.get((symbol, tf))
+        if bundle is not None:
+            return bundle
+        directory = self._bundle_dir(symbol, tf)
+        meta_path = directory / 'meta.json'
+        if not meta_path.exists():
+            raise ValueError(f"No trained models for {symbol} {tf}. Run an analysis first.")
+        meta = json.loads(meta_path.read_text())
+        models = {name: load_model(directory, name) for name in meta['models']}
+        bundle = {'models': models, 'meta': meta}
+        with self._lock:
+            self.bundles[(symbol, tf)] = bundle
+        return bundle

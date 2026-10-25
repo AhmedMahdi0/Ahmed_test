@@ -197,22 +197,11 @@ class PriceStreamer:
                 time.sleep(5)
 
     def _get_price_stats(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get price statistics for a symbol."""
-        try:
-            import yfinance as yf
+        """Get the latest price for a symbol."""
+        from .api import get_service
 
-            ticker = f"{symbol}-USD"
-            data = yf.Ticker(ticker)
-            info = data.info
-
-            return {
-                'price': info.get('regularMarketPrice'),
-                'change_24h': info.get('regularMarketChangePercent'),
-                'volume_24h': info.get('volume24Hr'),
-                'market_cap': info.get('marketCap'),
-            }
-        except Exception:
-            return None
+        price = get_service().fetcher.get_latest_price(symbol)
+        return {'price': price} if price is not None else None
 
 
 # Global price streamer instance
