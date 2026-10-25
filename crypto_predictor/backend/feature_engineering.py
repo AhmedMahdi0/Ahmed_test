@@ -126,6 +126,96 @@ class FeatureEngineer:
             f = f.add_prefix(prefix)
         return f
 
+    def support_resistance_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Distance to and strength of nearby support / resistance levels.
+
+        Levels come from swing points: candle i is a swing high if its high is the
+        highest of the k candles on each side. That is only knowable k candles
+        later, so a swing point becomes a level at i + k, never earlier. Highs and
+        lows both count as levels (old resistance can become support).
+        Distances are in ATRs so they mean the same thing for any price or timeframe.
+        """
+        cfg = self.config.app_config
+        k, lookback = cfg.sr_pivot_bars, cfg.sr_lookback
+        high, low, close = df['high'].to_numpy(), df['low'].to_numpy(), df['close'].to_numpy()
+        n = len(df)
+
+        prev_close = df['close'].shift(1)
+        true_range = pd.concat([df['high'] - df['low'], (df['high'] - prev_close).abs(),
+                                (df['low'] - prev_close).abs()], axis=1).max(axis=1)
+        atr = true_range.rolling(cfg.atr_window).mean().to_numpy()
+
+        win = 2 * k + 1
+        is_high = (df['high'] == df['high'].rolling(win, center=True).max()).to_numpy()
+        is_low = (df['low'] == df['low'].rolling(win, center=True).min()).to_numpy()
+        hi_idx, lo_idx = np.flatnonzero(is_high), np.flatnonzero(is_low)
+        pivot_idx = np.concatenate([hi_idx, lo_idx])
+        pivot_price = np.concatenate([high[hi_idx], low[lo_idx]])
+        order = np.argsort(pivot_idx, kind='stable')
+        pivot_idx, pivot_price = pivot_idx[order], pivot_price[order]
+        confirmed_at = pivot_idx + k
+
+        cap = 10.0  # "no level within reach", in ATRs
+        res_dist = np.full(n, np.nan)
+        sup_dist = np.full(n, np.nan)
+        res_strength = np.full(n, np.nan)
+        sup_strength = np.full(n, np.nan)
+        res_level = np.full(n, np.nan)
+        sup_level = np.full(n, np.nan)
+        start = 0
+        stop = 0
+        for t in range(n):
+            if np.isnan(atr[t]) or atr[t] <= 0:
+                continue
+            while stop < len(confirmed_at) and confirmed_at[stop] <= t:
+                stop += 1
+            while start < stop and pivot_idx[start] < t - lookback:
+                start += 1
+            levels = pivot_price[start:stop]
+            zone = 0.5 * atr[t]
+            above = levels[levels > close[t]]
+            below = levels[levels < close[t]]
+            if above.size:
+                r = above.min()
+                res_level[t] = r
+                res_dist[t] = min((r - close[t]) / atr[t], cap)
+                res_strength[t] = np.count_nonzero(np.abs(levels - r) <= zone)
+            else:
+                res_dist[t], res_strength[t] = cap, 0
+            if below.size:
+                s = below.max()
+                sup_level[t] = s
+                sup_dist[t] = min((close[t] - s) / atr[t], cap)
+                sup_strength[t] = np.count_nonzero(np.abs(levels - s) <= zone)
+            else:
+                sup_dist[t], sup_strength[t] = cap, 0
+
+        f = pd.DataFrame(index=df.index)
+        f['sr_res_dist_atr'] = res_dist
+        f['sr_sup_dist_atr'] = sup_dist
+        f['sr_res_strength'] = res_strength
+        f['sr_sup_strength'] = sup_strength
+        span = res_dist + sup_dist
+        f['sr_position'] = np.where(span > 0, sup_dist / span, 0.5)
+        f.loc[np.isnan(span), 'sr_position'] = np.nan
+
+        # Events relative to the levels that existed one candle earlier.
+        prev_res, prev_sup = pd.Series(res_level).shift(1).to_numpy(), pd.Series(sup_level).shift(1).to_numpy()
+        prev_atr = pd.Series(atr).shift(1).to_numpy()
+        with np.errstate(invalid='ignore'):
+            f['sr_break_up'] = (close > prev_res).astype(float)
+            f['sr_break_down'] = (close < prev_sup).astype(float)
+            f['sr_reject_res'] = ((high >= prev_res - 0.2 * prev_atr) & (close < prev_res)).astype(float)
+            f['sr_bounce_sup'] = ((low <= prev_sup + 0.2 * prev_atr) & (close > prev_sup)).astype(float)
+
+        # Simple range extremes (Donchian channels), also in ATRs.
+        atr_s = pd.Series(atr, index=df.index)
+        for w in (20, 50, 100):
+            f[f'sr_dist_high_{w}'] = (df['high'].rolling(w).max() - df['close']) / atr_s
+            f[f'sr_dist_low_{w}'] = (df['close'] - df['low'].rolling(w).min()) / atr_s
+        return f.replace([np.inf, -np.inf], np.nan)
+
     def time_features(self, index: pd.DatetimeIndex, timeframe: str) -> pd.DataFrame:
         f = pd.DataFrame(index=index)
         dow = index.day_of_week
@@ -204,6 +294,8 @@ class FeatureEngineer:
         classes = class_names(cfg.label_mode)
 
         parts = [self.candle_features(ohlcv), self.time_features(ohlcv.index, timeframe)]
+        if cfg.use_support_resistance:
+            parts.append(self.support_resistance_features(ohlcv))
         if btc is not None and not btc.empty:
             parts.append(self.btc_features(btc, ohlcv.index))
         if macro is not None and not macro.empty:

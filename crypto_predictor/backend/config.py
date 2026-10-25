@@ -120,6 +120,9 @@ class AppConfig:
     macd_signal: int = 9
     atr_window: int = 14
     bb_window: int = 20
+    use_support_resistance: bool = False   # experimental feature group, see experiments/compare_features.py
+    sr_pivot_bars: int = 3                 # a swing high/low needs this many candles on each side
+    sr_lookback: int = 200                 # candles of swing points that count as active levels
 
     # Evaluation (walk-forward)
     walk_forward_splits: int = 4
@@ -197,6 +200,10 @@ class AppConfig:
             raise ValueError("walk_forward_splits must be between 2 and 10")
         if not 0.3 <= self.initial_train_frac <= 0.9:
             raise ValueError("initial_train_frac must be between 0.3 and 0.9")
+        if not 1 <= self.sr_pivot_bars <= 20:
+            raise ValueError("sr_pivot_bars must be between 1 and 20")
+        if not 20 <= self.sr_lookback <= 2000:
+            raise ValueError("sr_lookback must be between 20 and 2000")
         if not 0.0 <= self.min_confidence < 1.0:
             raise ValueError("min_confidence must be in [0, 1)")
 
