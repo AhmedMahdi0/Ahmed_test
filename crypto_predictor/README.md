@@ -1,39 +1,87 @@
-# CryptoPredictor Web Application
+# CryptoPredictor — إشارات اتجاه (طالع / نازل) على فريمات 1h و 4h و 1d
 
-A cryptocurrency price prediction application using deep learning models.
+المشروع يتنبأ **باتجاه الشمعة القادمة** بدل سعر محدد:
+**طالع (UP)** أو **نازل (DOWN)** أو **محايد (NEUTRAL)** إذا الحركة أصغر من عتبة صغيرة.
+كل فريم (1h، 4h، 1d) إله نماذجه وتقييمه وإشارته الخاصة.
 
-## Quick Start
+## التشغيل
 
-### 1. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Run the Application
-
-```bash
-python3 run.py
-```
-
-### If above doesn't work, then Running the application (FIRST TIME SETUP)
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python3 -m pip install -r requirements.txt
-python3 run.py
+pip install -r requirements.txt
+python3 run.py              # http://127.0.0.1:5000
+python3 run.py --port 8080 --no-browser
 ```
 
-## Use this after running above (if virtual environment)
+`torch` اختياري: بدونه بيشتغل Gradient Boosting و Logistic Regression فقط،
+وبتظهر GRU/LSTM/Transformer معطّلة بالواجهة.
+
+## كيف بيشتغل
+
+1. **البيانات**: شموع 1h/4h/1d مباشرة من Binance (بدون مفتاح API، وبيجيب الشموع المغلقة فقط).
+   إذا Binance مش متاح بيرجع لـ Yahoo Finance (الـ 4h بتنبني من 1h، وتاريخ الـ 1h محدود بسنتين).
+   وفي سياق إضافي اختياري: BTC للعملات البديلة، ومؤشرات S&P500 و NASDAQ و DXY و VIX، ومؤشر Fear & Greed.
+2. **الـ Features**: كلها نسب وعوائد مش أسعار خام، ومحسوبة من بيانات لحد إغلاق الشمعة الحالية فقط:
+   returns وlags، volatility، RSI، MACD، ATR%، Bollinger %B، المسافة عن EMA 20/50/200،
+   شكل الشمعة، الفوليوم، نسبة taker-buy، والساعة واليوم.
+   البيانات اليومية (مؤشرات الأسهم و FGI) ما بتدخل إلا بعد ما يخلص يومها.
+3. **الهدف (Label)**: عائد الشمعة القادمة (أو N شموع): `log(close[t+h] / close[t])`.
+   - **ثلاثي**: فوق +العتبة = UP، تحت −العتبة = DOWN، والباقي NEUTRAL.
+     العتبات الافتراضية: 1h = 0.25%، 4h = 0.5%، 1d = 1%.
+   - **ثنائي**: UP أو DOWN فقط.
+4. **النماذج**: LightGBM و Logistic Regression كـ baselines قوية، و GRU و LSTM و Transformer
+   على نافذة حقيقية من الشموع السابقة (48 شمعة لـ 1h، 42 لـ 4h، 30 لـ 1d).
+   التدريب فيه class weights و early stopping، والـ **Ensemble** هو متوسط الاحتمالات.
+5. **التقييم (Walk-forward)**: ندرّب على الماضي ونختبر على الفترة اللي بعده، ونكرر،
+   مع purge gap بين التدريب والاختبار. وبنقارن النماذج مع baselines:
+   - الفئة الأكثر تكراراً،
+   - "نفس اتجاه الشمعة السابقة"،
+   - "دائماً طالع".
+6. **Backtest**: long على UP و short على DOWN (قابل للتعطيل)، مع رسوم تداول،
+   وبيحسب Sharpe و Max drawdown ونسبة الربح.
+7. **الإشارة**: النماذج بتتدرب من جديد على كل البيانات، وبتتنبأ لآخر شمعة مغلقة. الإشارة فيها:
+   - الاحتمالات،
+   - مستوى الثقة (low / medium / high)،
+   - اتفاق النماذج،
+   - ونسبة صحة الإشارات المشابهة في الماضي.
+
+## قراءة النتائج
+
+- **Directional accuracy**: لما النموذج يقول UP أو DOWN، كم مرة السعر فعلاً تحرك بهالاتجاه.
+- النموذج مفيد **فقط إذا تفوّق بوضوح على صفوف الـ baseline**.
+  اتجاه الكريبتو قريب من رمي عملة، ونتيجة 52–55% بشكل ثابت تعتبر جيدة.
+- اختبار على random walk (بيانات ما فيها أي نمط) بيعطي ~50%. هذا تأكيد إنه ما في تسريب بيانات،
+  بعكس النسخة القديمة اللي كانت دقتها العالية ناتجة عن التسريب.
+
+## API
+
+| Method | Endpoint | الوصف |
+|---|---|---|
+| POST | `/api/analyze` | `{symbol, timeframes: ["1h","4h","1d"], models: [...], settings: {...}}` ← بيرجع `task_id` |
+| GET | `/api/analyze/<task_id>` | التقدّم والنتيجة |
+| POST | `/api/analyze/<task_id>/cancel` | إلغاء |
+| GET | `/api/signal/<symbol>?timeframes=1h,4h` | تحديث الإشارة بشموع جديدة بدون إعادة تدريب |
+| GET | `/api/results/<symbol>/<tf>` | آخر نتيجة تحليل |
+| GET | `/api/export/<symbol>/<tf>` | CSV لتنبؤات الاختبار (out-of-sample) |
+| GET/PUT | `/api/config` | الإعدادات (بتنحفظ في `~/.crypto_predictor/config_v2.json`) |
+| GET | `/api/models`, `/api/timeframes`, `/api/cryptocurrencies` | قوائم |
+
+النماذج المدرّبة بتنحفظ في `~/crypto_predictor_output/models/<SYMBOL>_<TF>/`.
+
+## الاختبارات
+
 ```bash
-source .venv/bin/activate && python3 run.py
+pytest -q tests
 ```
 
-This will start the Flask API server on http://127.0.0.1:5000 and open the web UI in your default browser.
+الاختبارات بتشتغل على بيانات صناعية بدون إنترنت. بتتحقق من:
+- إنه ما في نظر للمستقبل في الـ features،
+- إنه الـ label محاذي للشمعة الصحيحة،
+- محاذاة البيانات اليومية،
+- الـ purge في الـ walk-forward،
+- التشغيل الكامل للخدمة،
+- إعادة التحميل من القرص،
+- مسار الـ API.
 
-### Command Line Options
-
-```bash
-python run.py --port 8080 # custom port
-python run.py --debug # immediate response to changes
-```
+> ⚠️ هذا مش نصيحة مالية.

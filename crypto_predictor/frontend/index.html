@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CryptoPredictor - AI-Powered Cryptocurrency Predictions</title>
+    <title>CryptoPredictor - Direction Signals</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -19,7 +18,7 @@
                     <span class="logo-icon">📈</span>
                     <div class="logo-text">
                         <h1>CryptoPredictor</h1>
-                        <span class="tagline">AI-Powered Price Predictions</span>
+                        <span class="tagline">Up / Down signals for 1h · 4h · 1d</span>
                     </div>
                 </div>
             </div>
@@ -46,7 +45,7 @@
                 <div class="step-connector"></div>
                 <div class="step" data-step="4">
                     <div class="step-number">4</div>
-                    <span class="step-label">Results</span>
+                    <span class="step-label">Signals</span>
                 </div>
             </div>
 
@@ -54,35 +53,15 @@
             <section id="step-1" class="step-content active">
                 <div class="step-panel">
                     <h2>Choose Your Cryptocurrency</h2>
-                    <p class="step-description">Select the cryptocurrency you want to analyze and predict.</p>
-                    
+                    <p class="step-description">Select the cryptocurrency you want a direction signal for.</p>
+
                     <div class="crypto-grid" id="crypto-grid">
-                        <div class="crypto-card skeleton">
-                            <div class="skeleton-symbol"></div>
-                            <div class="skeleton-name"></div>
-                        </div>
-                        <div class="crypto-card skeleton">
-                            <div class="skeleton-symbol"></div>
-                            <div class="skeleton-name"></div>
-                        </div>
-                        <div class="crypto-card skeleton">
-                            <div class="skeleton-symbol"></div>
-                            <div class="skeleton-name"></div>
-                        </div>
-                        <div class="crypto-card skeleton">
-                            <div class="skeleton-symbol"></div>
-                            <div class="skeleton-name"></div>
-                        </div>
-                        <div class="crypto-card skeleton">
-                            <div class="skeleton-symbol"></div>
-                            <div class="skeleton-name"></div>
-                        </div>
-                        <div class="crypto-card skeleton">
-                            <div class="skeleton-symbol"></div>
-                            <div class="skeleton-name"></div>
-                        </div>
+                        <div class="crypto-card skeleton"><div class="skeleton-symbol"></div><div class="skeleton-name"></div></div>
+                        <div class="crypto-card skeleton"><div class="skeleton-symbol"></div><div class="skeleton-name"></div></div>
+                        <div class="crypto-card skeleton"><div class="skeleton-symbol"></div><div class="skeleton-name"></div></div>
+                        <div class="crypto-card skeleton"><div class="skeleton-symbol"></div><div class="skeleton-name"></div></div>
                     </div>
-                    
+
                     <div class="step-actions">
                         <button id="next-step-1" class="btn btn-primary btn-lg" disabled>
                             Continue <span class="btn-arrow">→</span>
@@ -94,106 +73,54 @@
             <!-- Step 2: Configuration -->
             <section id="step-2" class="step-content">
                 <div class="step-panel">
-                    <h2>Configure Prediction Settings</h2>
-                    <p class="step-description">Customize your prediction parameters.</p>
-                    
+                    <h2>Configure the Analysis</h2>
+                    <p class="step-description">Each timeframe gets its own models, evaluation and signal for the next candle.</p>
+
                     <div class="config-grid">
                         <div class="config-card">
-                            <h3>🎯 Prediction Horizon</h3>
-                            <p>How many days ahead do you want to predict?</p>
-                            <div class="horizon-options">
-                                <label for="days-ahead-select" class="horizon-option">
-                                    <select id="days-ahead-select" class="horizon-btn" aria-label="Prediction horizon">
-                                        <option value="1">1 Day</option>
-                                        <option value="2">2 Days</option>
-                                        <option value="3">3 Days</option>
-                                        <option value="4">4 Days</option>
-                                        <option value="5">5 Days</option>
-                                        <option value="6">6 Days</option>
-                                        <option value="7" selected>7 Days</option>
-                                        <option value="8">8 Days</option>
-                                        <option value="9">9 Days</option>
-                                        <option value="10">10 Days</option>
-                                        <option value="11">11 Days</option>
-                                        <option value="12">12 Days</option>
-                                        <option value="13">13 Days</option>
-                                        <option value="14">14 Days</option>
-                                        <option value="15">15 Days</option>
-                                        <option value="16">16 Days</option>
-                                        <option value="17">17 Days</option>
-                                        <option value="18">18 Days</option>
-                                        <option value="19">19 Days</option>
-                                        <option value="20">20 Days</option>
-                                        <option value="21">21 Days</option>
-                                        <option value="22">22 Days</option>
-                                        <option value="23">23 Days</option>
-                                        <option value="24">24 Days</option>
-                                        <option value="25">25 Days</option>
-                                        <option value="26">26 Days</option>
-                                        <option value="27">27 Days</option>
-                                        <option value="28">28 Days</option>
-                                        <option value="29">29 Days</option>
-                                        <option value="30">30 Days</option>
-                                    </select>
+                            <h3>⏱️ Timeframes</h3>
+                            <p>Which candles do you want a signal for?</p>
+                            <div class="model-options" id="timeframe-options">
+                                <label class="model-option">
+                                    <input type="checkbox" name="timeframes" value="1h" checked>
+                                    <span class="model-info"><strong>1 Hour</strong><small>~2 years of hourly candles</small></span>
+                                </label>
+                                <label class="model-option">
+                                    <input type="checkbox" name="timeframes" value="4h" checked>
+                                    <span class="model-info"><strong>4 Hours</strong><small>~6 years of 4h candles</small></span>
+                                </label>
+                                <label class="model-option">
+                                    <input type="checkbox" name="timeframes" value="1d" checked>
+                                    <span class="model-info"><strong>1 Day</strong><small>Full daily history</small></span>
                                 </label>
                             </div>
-                            <p class="horizon-note">⚠️ Longer horizons have higher uncertainty</p>
                         </div>
-                        
+
                         <div class="config-card">
-                            <h3>🧠 AI Models</h3>
-                            <p>Select which neural network models to use:</p>
+                            <h3>🧠 Models</h3>
+                            <p>Selected models are averaged into one ensemble signal.</p>
+                            <div class="model-options" id="model-options">
+                                <!-- Filled from /api/models -->
+                            </div>
+                        </div>
+
+                        <div class="config-card">
+                            <h3>🎯 Signal Type</h3>
+                            <p>What should the model predict?</p>
                             <div class="model-options">
                                 <label class="model-option">
-                                    <input type="checkbox" name="models" value="gru" checked>
-                                    <span class="model-info">
-                                        <strong>Bi-GRU</strong>
-                                        <small>Fast, memory-efficient</small>
-                                    </span>
+                                    <input type="radio" name="label-mode" value="ternary" checked>
+                                    <span class="model-info"><strong>Up / Neutral / Down</strong><small>Small moves count as neutral (recommended)</small></span>
                                 </label>
                                 <label class="model-option">
-                                    <input type="checkbox" name="models" value="lstm" checked>
-                                    <span class="model-info">
-                                        <strong>Bi-LSTM</strong>
-                                        <small>Long-term patterns</small>
-                                    </span>
-                                </label>
-                                <label class="model-option">
-                                    <input type="checkbox" name="models" value="hybrid_lstm" checked>
-                                    <span class="model-info">
-                                        <strong>Hybrid Transformer+LSTM</strong>
-                                        <small>Advanced attention</small>
-                                    </span>
-                                </label>
-                                <label class="model-option">
-                                    <input type="checkbox" name="models" value="hybrid_gru" checked>
-                                    <span class="model-info">
-                                        <strong>Hybrid Transformer+GRU</strong>
-                                        <small>Best of both worlds</small>
-                                    </span>
+                                    <input type="radio" name="label-mode" value="binary">
+                                    <span class="model-info"><strong>Up / Down</strong><small>Every candle is either up or down</small></span>
                                 </label>
                             </div>
+                            <p class="horizon-note">💡 Neutral thresholds can be tuned in Advanced Settings</p>
                         </div>
-                        
-                        <!-- Custom Date Range -->
-                        <div class="config-card">
-                            <h3>📅 Training Date Range</h3>
-                            <p>Customize the historical data period for training:</p>
-                            <div class="date-range-inputs">
-                                <div class="date-input-group">
-                                    <label for="start-date">Start Date</label>
-                                    <input type="date" id="start-date" name="start-date" value="2018-02-01">
-                                </div>
-                                <div class="date-input-group">
-                                    <label for="end-date">End Date</label>
-                                    <input type="date" id="end-date" name="end-date">
-                                </div>
-                            </div>
-                            <p class="date-note">💡 More historical data generally improves prediction accuracy</p>
-                        </div>
-                        
                     </div>
-                    
+
                     <!-- Advanced Settings Collapsible -->
                     <div class="advanced-settings-container">
                         <button class="advanced-toggle" id="advanced-toggle">
@@ -204,88 +131,73 @@
                         <div class="advanced-settings hidden" id="advanced-settings">
                             <div class="advanced-grid">
                                 <div class="advanced-input-group">
-                                    <label for="batch-size">Batch Size</label>
-                                    <input type="number" id="batch-size" value="64" min="16" max="256" step="16">
-                                    <small>Samples per training batch</small>
+                                    <label for="thr-1h">Neutral band 1h (%)</label>
+                                    <input type="number" id="thr-1h" data-tf="1h" class="thr-input" min="0" max="5" step="0.05">
+                                    <small>|move| below this = neutral</small>
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="epochs">Training Epochs</label>
-                                    <input type="number" id="epochs" value="200" min="10" max="500" step="10">
-                                    <small>Number of training iterations</small>
+                                    <label for="thr-4h">Neutral band 4h (%)</label>
+                                    <input type="number" id="thr-4h" data-tf="4h" class="thr-input" min="0" max="10" step="0.05">
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="transformer-epochs">Transformer Epochs</label>
-                                    <input type="number" id="transformer-epochs" value="200" min="10" max="500" step="10">
+                                    <label for="thr-1d">Neutral band 1d (%)</label>
+                                    <input type="number" id="thr-1d" data-tf="1d" class="thr-input" min="0" max="20" step="0.1">
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="learning-rate">Learning Rate</label>
-                                    <input type="number" id="learning-rate" value="0.001" min="0.0001" max="0.1" step="0.0001">
-                                    <small>Lower = slower but stable</small>
+                                    <label for="horizon-bars">Horizon (candles)</label>
+                                    <input type="number" id="horizon-bars" data-key="horizon_bars" min="1" max="24" step="1">
+                                    <small>Predict the move over the next N candles</small>
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="hidden-dim">Hidden Dimensions</label>
-                                    <input type="number" id="hidden-dim" value="64" min="16" max="256" step="16">
-                                    <small>Size of hidden layers</small>
+                                    <label for="wf-splits">Walk-forward folds</label>
+                                    <input type="number" id="wf-splits" data-key="walk_forward_splits" min="2" max="10" step="1">
+                                    <small>More folds = more reliable, slower</small>
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="price-lag-days">Price Lag Days</label>
-                                    <input type="number" id="price-lag-days" value="7" min="1" max="30" step="1">
-                                    <small>History days for price lag features</small>
+                                    <label for="epochs">Max epochs (NN)</label>
+                                    <input type="number" id="epochs" data-key="epochs" min="5" max="300" step="5">
+                                    <small>Early stopping usually ends sooner</small>
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="volume-lag-days">Volume Lag Days</label>
-                                    <input type="number" id="volume-lag-days" value="1" min="1" max="30" step="1">
-                                    <small>History days for volume lag features</small>
+                                    <label for="hidden-dim">Hidden size (NN)</label>
+                                    <input type="number" id="hidden-dim" data-key="hidden_dim" min="16" max="256" step="16">
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="fgi-lag-days">FGI Lag Days</label>
-                                    <input type="number" id="fgi-lag-days" value="7" min="1" max="30" step="1">
-                                    <small>Fear & Greed index lag window</small>
+                                    <label for="learning-rate">Learning rate (NN)</label>
+                                    <input type="number" id="learning-rate" data-key="learning_rate" min="0.00001" max="0.1" step="0.0001">
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="marketcap-lag-days">Market Cap Lag Days</label>
-                                    <input type="number" id="marketcap-lag-days" value="1" min="1" max="30" step="1">
-                                    <small>History days for market cap lags</small>
+                                    <label for="fee-bps">Fee per trade (bps)</label>
+                                    <input type="number" id="fee-bps" data-key="fee_bps" min="0" max="100" step="1">
+                                    <small>10 bps = 0.1% (backtest)</small>
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="rsi-window">RSI Window</label>
-                                    <input type="number" id="rsi-window" value="14" min="2" max="60" step="1">
-                                    <small>RSI lookback window</small>
+                                    <label for="min-confidence">Min confidence to trade</label>
+                                    <input type="number" id="min-confidence" data-key="min_confidence" min="0" max="0.95" step="0.05">
+                                    <small>0 = trade every signal (backtest)</small>
                                 </div>
                                 <div class="advanced-input-group">
-                                    <label for="macd-fast">MACD Fast</label>
-                                    <input type="number" id="macd-fast" value="12" min="2" max="50" step="1">
+                                    <label for="data-source">Data source</label>
+                                    <select id="data-source" data-key="data_source">
+                                        <option value="auto">Auto (Binance → Yahoo)</option>
+                                        <option value="binance">Binance only</option>
+                                        <option value="yfinance">Yahoo Finance only</option>
+                                    </select>
                                 </div>
-                                <div class="advanced-input-group">
-                                    <label for="macd-slow">MACD Slow</label>
-                                    <input type="number" id="macd-slow" value="26" min="2" max="100" step="1">
-                                </div>
-                                <div class="advanced-input-group">
-                                    <label for="macd-signal">MACD Signal</label>
-                                    <input type="number" id="macd-signal" value="9" min="1" max="50" step="1">
-                                </div>
-                                <div class="advanced-input-group">
-                                    <label for="train-test-split">Train/Test Split</label>
-                                    <input type="number" id="train-test-split" value="0.8" min="0.5" max="0.95" step="0.01">
-                                    <small>Fraction of data used for training</small>
-                                </div>
-                                <div class="advanced-input-group">
-                                    <label for="num-layers">Number of Layers</label>
-                                    <input type="number" id="num-layers" value="2" min="1" max="6" step="1">
-                                </div>
-                                <div class="advanced-input-group">
-                                    <label for="transformer-learning-rate">Transformer LR</label>
-                                    <input type="number" id="transformer-learning-rate" value="0.0005" min="0.00001" max="0.01" step="0.00001">
+                                <div class="advanced-input-group checkbox-group">
+                                    <label><input type="checkbox" id="allow-short" data-key="allow_short"> Allow short in backtest</label>
+                                    <label><input type="checkbox" id="use-btc" data-key="use_btc_context"> BTC context for altcoins</label>
+                                    <label><input type="checkbox" id="use-macro" data-key="use_macro"> Macro (stocks, DXY, VIX, Fear &amp; Greed)</label>
                                 </div>
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="selected-crypto-summary">
                         <span class="summary-label">Selected:</span>
                         <span id="selected-crypto-name" class="summary-value">--</span>
                     </div>
-                    
+
                     <div class="step-actions">
                         <button id="prev-step-2" class="btn btn-secondary">
                             <span class="btn-arrow">←</span> Back
@@ -306,57 +218,25 @@
                     <div class="analysis-header">
                         <div id="analysis-icon" class="analysis-icon spinning">⚙️</div>
                         <h2 id="analysis-title">Analyzing <span id="analyzing-crypto">--</span></h2>
-                        <p id="analysis-subtitle" class="step-description">This may take a few minutes...</p>
+                        <p id="analysis-subtitle" class="step-description">Fetching data, walk-forward testing and training models...</p>
                     </div>
-                    
-                    <div class="analysis-stages">
-                        <div class="stage" id="stage-fetch">
-                            <div class="stage-status">
-                                <span class="stage-icon">📊</span>
-                                <span class="stage-name">Fetching Market Data</span>
-                            </div>
-                            <div class="stage-progress">
-                                <div class="stage-bar"></div>
-                            </div>
-                        </div>
-                        
-                        <div class="stage" id="stage-train">
-                            <div class="stage-status">
-                                <span class="stage-icon">🧠</span>
-                                <span class="stage-name">Training AI Models</span>
-                            </div>
-                            <div class="stage-progress">
-                                <div class="stage-bar"></div>
-                            </div>
-                            <div class="stage-models" id="training-models">
-                                <!-- Model training status will appear here -->
-                            </div>
-                        </div>
-                        
-                        <div class="stage" id="stage-predict">
-                            <div class="stage-status">
-                                <span class="stage-icon">🔮</span>
-                                <span class="stage-name">Generating Predictions</span>
-                            </div>
-                            <div class="stage-progress">
-                                <div class="stage-bar"></div>
-                            </div>
-                        </div>
+
+                    <div class="analysis-stages" id="analysis-stages">
+                        <!-- One stage per timeframe -->
                     </div>
-                    
+                    <p id="progress-message" class="progress-message">Starting...</p>
+
                     <div class="analysis-timer-row">
                         <div class="analysis-timer">
                             <span id="elapsed-time">00:00</span>
                             <span class="timer-label">time elapsed</span>
                         </div>
                     </div>
-                    
-                    <!-- Cancel Training Button -->
+
                     <div class="cancel-training-container">
                         <button id="cancel-training" class="btn btn-danger">
-                            <span class="btn-icon">✕</span> Cancel Training
+                            <span class="btn-icon">✕</span> Cancel
                         </button>
-                        <input type="hidden" id="training-session-id" value="">
                     </div>
                 </div>
             </section>
@@ -364,204 +244,55 @@
             <!-- Step 4: Results -->
             <section id="step-4" class="step-content">
                 <div class="results-container">
-                    <!-- Results Header -->
                     <div class="results-header">
                         <div class="results-title">
-                            <h2>Prediction Results for <span id="results-crypto">--</span></h2>
-                            <p class="results-date">Generated on <span id="results-date">--</span></p>
+                            <h2>Signals for <span id="results-crypto">--</span></h2>
+                            <p class="results-date">Generated <span id="results-date">--</span></p>
                         </div>
                         <div class="results-actions">
                             <button id="back-to-config" class="btn btn-secondary">
-                                <span class="btn-icon">←</span> Back to Settings
+                                <span class="btn-icon">←</span> Settings
                             </button>
-                            <button id="export-csv" class="btn btn-secondary">
-                                <span class="btn-icon">📥</span> Download CSV Data
+                            <button id="refresh-signal" class="btn btn-secondary" title="Fetch the latest candles and re-predict without retraining">
+                                <span class="btn-icon">🔄</span> Refresh Signal
                             </button>
                             <button id="new-prediction" class="btn btn-primary">
                                 <span class="btn-icon">🏠</span> Start Over
                             </button>
                         </div>
                     </div>
-                    
-                    <!-- Quick Stats -->
-                    <div class="quick-stats">
-                        <div class="stat-card">
-                            <span class="stat-icon">📈</span>
-                            <div class="stat-content">
-                                <span class="stat-title">Current Price</span>
-                                <span id="current-price" class="stat-number">--</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-icon">🎯</span>
-                            <div class="stat-content">
-                                <span class="stat-title">Predicted (7d)</span>
-                                <span id="predicted-price" class="stat-number">--</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-icon" id="trend-icon">📊</span>
-                            <div class="stat-content">
-                                <span class="stat-title">Expected Change</span>
-                                <span id="price-change" class="stat-number">--</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <span class="stat-icon">⭐</span>
-                            <div class="stat-content">
-                                <span class="stat-title">Best Model</span>
-                                <span id="best-model" class="stat-number">--</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Training Summary -->
-                    <div class="results-section training-summary-section">
-                        <h3>🧠 Training Summary</h3>
-                        <div class="training-summary-grid" id="training-summary">
-                            <div class="summary-item">
-                                <span class="summary-label">Epochs</span>
-                                <span class="summary-value" id="summary-epochs">--</span>
-                            </div>
-                            <div class="summary-item">
-                                <span class="summary-label">Batch Size</span>
-                                <span class="summary-value" id="summary-batch-size">--</span>
-                            </div>
-                            <div class="summary-item">
-                                <span class="summary-label">Learning Rate</span>
-                                <span class="summary-value" id="summary-learning-rate">--</span>
-                            </div>
-                            <div class="summary-item">
-                                <span class="summary-label">Hidden Dim</span>
-                                <span class="summary-value" id="summary-hidden-dim">--</span>
-                            </div>
-                            <div class="summary-item">
-                                <span class="summary-label">Models Trained</span>
-                                <span class="summary-value" id="summary-models">--</span>
-                            </div>
-                            <div class="summary-item">
-                                <span class="summary-label">Training Time</span>
-                                <span class="summary-value" id="summary-time">--</span>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Chart Section -->
-                    <div class="results-section chart-section">
-                        <div class="chart-header">
-                            <h3>Price Forecast Chart</h3>
-                            <!-- Chart Action Buttons -->
-                            <div class="chart-actions">
-                                <button class="chart-action-btn" id="toggle-percent" title="Toggle % Change View">
-                                    <span class="action-icon">%</span>
-                                </button>
-                                <button class="chart-action-btn" id="toggle-confidence" title="Show Confidence Intervals">
-                                    <span class="action-icon">±</span>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="chart-controls">
-                            <div class="chart-filters">
-                                <span class="filter-label">Show:</span>
-                                <div class="filter-toggles" id="chart-toggles">
-                                    <button class="filter-toggle active" data-series="actual">Actual</button>
-                                    <button class="filter-toggle active" data-series="gru">Bi-GRU</button>
-                                    <button class="filter-toggle active" data-series="lstm">Bi-LSTM</button>
-                                    <button class="filter-toggle active" data-series="hybrid_lstm">Hybrid LSTM</button>
-                                    <button class="filter-toggle active" data-series="hybrid_gru">Hybrid GRU</button>
-                                </div>
-                            </div>
-                            <div class="chart-date-range">
-                                <span class="filter-label">Period:</span>
-                                <div class="range-toggles" id="range-toggles">
-                                    <button class="range-toggle" data-range="1m">1M</button>
-                                    <button class="range-toggle" data-range="3m">3M</button>
-                                    <button class="range-toggle" data-range="6m">6M</button>
-                                    <button class="range-toggle active" data-range="all">All</button>
-                                </div>
-                            </div>
-                        </div>
-                        <p class="chart-note">
-                            💡 Chart shows test period data (after 80% training split). Predictions start from the most recent test data.
-                        </p>
-                        <div class="chart-wrapper">
-                            <canvas id="price-chart"></canvas>
-                        </div>
-                    </div>
-                    
-                    <!-- Model-Specific Charts -->
-                    <div class="results-section model-charts-section">
-                        <h3>Model-Specific Performance</h3>
-                        <div class="model-charts-tabs">
-                            <button class="model-tab active" data-model="gru">Bi-GRU</button>
-                            <button class="model-tab" data-model="lstm">Bi-LSTM</button>
-                            <button class="model-tab" data-model="hybrid_lstm">Hybrid LSTM</button>
-                            <button class="model-tab" data-model="hybrid_gru">Hybrid GRU</button>
-                        </div>
-                        <div class="model-chart-container">
-                            <canvas id="model-specific-chart"></canvas>
-                        </div>
-                    </div>
-                    
-                    <!-- Prediction Accuracy Scoreboard -->
-                    <div class="results-section accuracy-section">
-                        <h3>📊 Prediction Accuracy Scoreboard</h3>
-                        <div class="accuracy-grid" id="accuracy-scoreboard">
-                            <!-- Scoreboard cards will be inserted here -->
-                        </div>
-                    </div>
-                    
-                    <!-- Predictions Table -->
+
+                    <div id="results-errors" class="results-errors hidden"></div>
+
+                    <!-- One card per timeframe -->
+                    <div class="signal-grid" id="signal-cards"></div>
+
+                    <!-- Per-timeframe details -->
                     <div class="results-section">
-                        <h3>Detailed Price Forecast</h3>
-                        <div class="table-container">
-                            <table id="predictions-table" class="predictions-table">
-                                <thead>
-                                    <tr>
-                                        <th>Date</th>
-                                        <th>Type</th>
-                                        <th>Actual</th>
-                                        <th>Bi-GRU</th>
-                                        <th>Bi-LSTM</th>
-                                        <th>Hybrid LSTM</th>
-                                        <th>Hybrid GRU</th>
-                                        <th>Average Prediction</th>
-                                        <th>Trend</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="predictions-tbody">
-                                    <!-- Predictions will be inserted here -->
-                                </tbody>
-                            </table>
+                        <div class="details-header">
+                            <h3>Timeframe Details</h3>
+                            <div class="model-charts-tabs" id="tf-tabs"></div>
                         </div>
+                        <div id="tf-details"></div>
                     </div>
-                    
-                    <!-- Model Performance -->
-                    <div class="results-section">
-                        <h3>Model Performance Metrics</h3>
-                        <div class="metrics-grid" id="metrics-container">
-                            <!-- Metrics will be inserted here -->
-                        </div>
-                        <p class="metrics-note">
-                            💡 Lower RMSE and MAE values indicate better model accuracy. 
-                            The highlighted values show the best performing model for each metric.
-                        </p>
-                    </div>
+
+                    <p class="disclaimer">
+                        ⚠️ Signals are statistical estimates from historical data, not financial advice.
+                        Crypto direction is close to a coin flip; judge every model against the baseline rows in the scoreboard.
+                    </p>
                 </div>
             </section>
         </main>
 
-        <!-- Footer -->
         <footer class="footer">
-            <p>CryptoPredictor uses advanced neural networks (GRU, LSTM, Hybrid Transformer) for predictions.</p>
+            <p>CryptoPredictor — LightGBM, logistic regression, GRU, LSTM and Transformer direction classifiers with walk-forward evaluation.</p>
         </footer>
     </div>
 
-    <!-- Toast Notification -->
     <div id="toast" class="toast">
         <span id="toast-message"></span>
     </div>
-    
+
     <script src="app.js"></script>
 </body>
 </html>

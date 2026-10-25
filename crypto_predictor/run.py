@@ -10,7 +10,6 @@ import argparse
 import webbrowser
 from pathlib import Path
 
-import socketio
 
 # Add the project root to the path
 project_root = Path(__file__).parent
@@ -19,7 +18,7 @@ sys.path.insert(0, str(project_root))
 
 def main():
     parser = argparse.ArgumentParser(
-        description='CryptoPredictor - AI-Powered Cryptocurrency Price Predictions',
+        description='CryptoPredictor - Up / Down signals for 1h, 4h and 1d candles',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -89,6 +88,7 @@ Examples:
         host=args.host,
         port=args.port,
         debug=args.debug,
+        allow_unsafe_werkzeug=True,  # local development server
         )
     else:
         app.run(
