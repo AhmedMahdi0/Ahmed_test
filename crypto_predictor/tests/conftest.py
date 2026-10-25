@@ -1,4 +1,5 @@
 import sys
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,7 @@ class FakeFetcher:
 
     def fetch_ohlcv(self, symbol, timeframe, history_days=None):
         self.calls.append((symbol, timeframe))
-        df = make_candles(self.n, timeframe, seed=hash((symbol, timeframe)) % 1000)
+        df = make_candles(self.n, timeframe, seed=zlib.crc32(f'{symbol}-{timeframe}'.encode()) % 1000)
         df.attrs['source'] = 'fake'
         return df
 
