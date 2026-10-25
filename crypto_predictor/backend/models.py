@@ -1,479 +1,369 @@
 """
-ML Models module for CryptoPredictor.
-Contains GRU, LSTM, and Hybrid Transformer models.
+Direction classifiers for CryptoPredictor.
+
+Every model shares one interface built around the *full* feature matrix and
+row indices, so sequence models can look back over the candles that precede
+a row even when those candles belong to an earlier split:
+
+    model.fit(X, y, fit_idx, val_idx)      # X: (n_rows, n_features), y: class ids
+    model.predict_proba(X, idx)            # -> (len(idx), n_classes)
+
+Tabular models: gradient boosting ('gbm') and logistic regression ('logreg').
+Sequence models (need PyTorch): 'gru', 'lstm', 'transformer'.
 """
 
+import copy
+import inspect
 import logging
-from typing import Optional, Dict, Tuple
+import pickle
 from pathlib import Path
+from typing import Dict, List, Optional
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 from .config import get_config
 
 logger = logging.getLogger(__name__)
 
-class GRUModel(nn.Module):
-    """Bidirectional GRU model for time series prediction."""
-    
-    def __init__(self, input_dim: int, hidden_dim: int = 64, num_layers: int = 2, dropout: float = 0.2):
-        super().__init__()
-        self.gru = nn.GRU(
-            input_dim, 
-            hidden_dim, 
-            num_layers, 
-            batch_first=True, 
-            bidirectional=True,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        self.fc = nn.Linear(hidden_dim * 2, 1)
-    
-    def forward(self, x):
-        x, _ = self.gru(x.unsqueeze(1))
-        return self.fc(x[:, -1, :])
-        
+try:
+    import torch
+    import torch.nn as nn
+    TORCH_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the environment
+    torch = None
+    nn = None
+    TORCH_AVAILABLE = False
+
+try:
+    import lightgbm as lgb
+    LIGHTGBM_AVAILABLE = True
+except ImportError:  # pragma: no cover - depends on the environment
+    lgb = None
+    LIGHTGBM_AVAILABLE = False
 
 
-class LSTMModel(nn.Module):
-    """Bidirectional LSTM model for time series prediction."""
-    
-    def __init__(self, input_dim: int, hidden_dim: int = 64, num_layers: int = 2, dropout: float = 0.2):
-        super().__init__()
-        self.lstm = nn.LSTM(
-            input_dim, 
-            hidden_dim, 
-            num_layers, 
-            batch_first=True, 
-            bidirectional=True,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        self.fc = nn.Linear(hidden_dim * 2, 1)
-    
-    def forward(self, x):
-        x, _ = self.lstm(x.unsqueeze(1))
-        return self.fc(x[:, -1, :])
+MODEL_INFO = {
+    'gbm': {'label': 'Gradient Boosting', 'description': 'LightGBM on tabular features - strong baseline'},
+    'logreg': {'label': 'Logistic Regression', 'description': 'Linear baseline, fast and robust'},
+    'gru': {'label': 'GRU', 'description': 'Recurrent net over a window of past candles'},
+    'lstm': {'label': 'LSTM', 'description': 'Recurrent net with long-term memory'},
+    'transformer': {'label': 'Transformer', 'description': 'Self-attention over past candles'},
+}
+SEQUENCE_MODELS = ('gru', 'lstm', 'transformer')
 
 
-class HybridTransformerLSTM(nn.Module):
-    """Hybrid Transformer + LSTM model."""
-    
-    def __init__(self, 
-                 input_dim: int, 
-                 hidden_dim: int = 128, 
-                 num_heads: int = 8, 
-                 num_layers: int = 4, 
-                 lstm_hidden_dim: int = 64, 
-                 lstm_layers: int = 2, 
-                 dropout: float = 0.2):
-        super().__init__()
-        self.embedding = nn.Linear(input_dim, hidden_dim)
-        
-        # Transformer Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim, 
-            nhead=num_heads, 
-            dropout=dropout, 
-            batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        # LSTM Decoder
-        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, lstm_layers, batch_first=True)
-        self.fc = nn.Linear(lstm_hidden_dim, 1)
-    
-    def forward(self, x):
-        x = self.embedding(x).unsqueeze(1)
-        x = self.transformer(x)
-        x, _ = self.lstm(x)
-        return self.fc(x[:, -1, :])
+def available_models() -> Dict[str, bool]:
+    return {name: (TORCH_AVAILABLE if name in SEQUENCE_MODELS else True) for name in MODEL_INFO}
 
 
-class HybridTransformerGRU(nn.Module):
-    """Hybrid Transformer + GRU model."""
-    
-    def __init__(self, 
-                 input_dim: int, 
-                 hidden_dim: int = 128, 
-                 num_heads: int = 8, 
-                 num_layers: int = 4, 
-                 gru_hidden_dim: int = 64, 
-                 gru_layers: int = 2, 
-                 dropout: float = 0.2):
-        super().__init__()
-        self.embedding = nn.Linear(input_dim, hidden_dim)
-        
-        # Transformer Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim, 
-            nhead=num_heads, 
-            dropout=dropout, 
-            batch_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-        
-        # GRU Decoder
-        self.gru = nn.GRU(hidden_dim, gru_hidden_dim, gru_layers, batch_first=True)
-        self.fc = nn.Linear(gru_hidden_dim, 1)
-    
-    def forward(self, x):
-        x = self.embedding(x).unsqueeze(1)
-        x = self.transformer(x)
-        x, _ = self.gru(x)
-        return self.fc(x[:, -1, :])
+def balanced_class_weights(y: np.ndarray, n_classes: int) -> np.ndarray:
+    counts = np.bincount(y.astype(int), minlength=n_classes).astype(float)
+    weights = np.where(counts > 0, len(y) / (n_classes * np.maximum(counts, 1)), 0.0)
+    return weights
+
+
+def _full_proba(proba: np.ndarray, model_classes, n_classes: int) -> np.ndarray:
+    """Expand predict_proba output to all classes (a class may be missing from a training fold)."""
+    out = np.zeros((proba.shape[0], n_classes))
+    out[:, np.asarray(model_classes, dtype=int)] = proba
+    return out
+
+
+class DirectionModel:
+    """Base class."""
+    name = 'base'
+
+    def __init__(self, n_classes: int, timeframe: str):
+        self.n_classes = n_classes
+        self.timeframe = timeframe
+        self.config = get_config().app_config
+
+    def fit(self, X: np.ndarray, y: np.ndarray, fit_idx: np.ndarray, val_idx: Optional[np.ndarray] = None,
+            cancel_check=None) -> 'DirectionModel':
+        raise NotImplementedError
+
+    def predict_proba(self, X: np.ndarray, idx: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+
+    def min_history(self) -> int:
+        """Rows of history required before the first predictable row."""
+        return 0
+
+    def save(self, path: Path) -> None:
+        with open(path, 'wb') as fh:
+            pickle.dump(self, fh)
+
+    @staticmethod
+    def load(path: Path) -> 'DirectionModel':
+        with open(path, 'rb') as fh:
+            return pickle.load(fh)
 
 
 # ============================================
-# Model Manager
+# Tabular models
 # ============================================
 
-class ModelManager:
-    """Manages training, prediction, and persistence of models."""
-    
-    MODEL_CLASSES = {
-        'gru': GRUModel,
-        'lstm': LSTMModel,
-        'hybrid_lstm': HybridTransformerLSTM,
-        'hybrid_gru': HybridTransformerGRU
-    }
-    
-    def __init__(self):
-        self.config = get_config()
-        self.models: Dict[str, nn.Module] = {}
-        self.scalers: Dict[str, MinMaxScaler] = {}
+class GBMModel(DirectionModel):
+    name = 'gbm'
+
+    def fit(self, X, y, fit_idx, val_idx=None, cancel_check=None):
+        cfg = self.config
+        y_fit = y[fit_idx].astype(int)
+        if LIGHTGBM_AVAILABLE:
+            self.model = lgb.LGBMClassifier(
+                n_estimators=cfg.gbm_estimators,
+                learning_rate=cfg.gbm_learning_rate,
+                num_leaves=cfg.gbm_num_leaves,
+                min_child_samples=50,
+                subsample=0.8,
+                subsample_freq=1,
+                colsample_bytree=0.8,
+                reg_lambda=1.0,
+                class_weight='balanced',
+                random_state=cfg.seed,
+                verbose=-1,
+            )
+            kwargs = {}
+            if val_idx is not None and len(val_idx) > 0:
+                if 'eval_X' in inspect.signature(self.model.fit).parameters:   # lightgbm >= 4.6
+                    kwargs.update(eval_X=(X[val_idx],), eval_y=(y[val_idx].astype(int),))
+                else:
+                    kwargs['eval_set'] = [(X[val_idx], y[val_idx].astype(int))]
+                kwargs['callbacks'] = [lgb.early_stopping(50, verbose=False)]
+            self.model.fit(X[fit_idx], y_fit, **kwargs)
+        else:
+            from sklearn.ensemble import HistGradientBoostingClassifier
+            self.model = HistGradientBoostingClassifier(
+                max_iter=min(cfg.gbm_estimators, 300),
+                learning_rate=cfg.gbm_learning_rate * 2,
+                max_leaf_nodes=cfg.gbm_num_leaves,
+                min_samples_leaf=50,
+                l2_regularization=1.0,
+                class_weight='balanced',
+                early_stopping=False,  # its internal split is random, which would leak time order
+                random_state=cfg.seed,
+            )
+            self.model.fit(X[fit_idx], y_fit)
+        return self
+
+    def predict_proba(self, X, idx):
+        return _full_proba(self.model.predict_proba(X[idx]), self.model.classes_, self.n_classes)
+
+    def feature_importance(self) -> Optional[np.ndarray]:
+        if LIGHTGBM_AVAILABLE and hasattr(self.model, 'booster_'):
+            return self.model.booster_.feature_importance(importance_type='gain')
+        return None
+
+
+class LogRegModel(DirectionModel):
+    name = 'logreg'
+
+    def fit(self, X, y, fit_idx, val_idx=None, cancel_check=None):
+        self.scaler = StandardScaler().fit(X[fit_idx])
+        self.model = LogisticRegression(C=0.05, max_iter=2000, class_weight='balanced')
+        self.model.fit(self.scaler.transform(X[fit_idx]), y[fit_idx].astype(int))
+        return self
+
+    def predict_proba(self, X, idx):
+        proba = self.model.predict_proba(self.scaler.transform(X[idx]))
+        return _full_proba(proba, self.model.classes_, self.n_classes)
+
+
+# ============================================
+# Sequence models (PyTorch)
+# ============================================
+
+if TORCH_AVAILABLE:
+
+    class _RNNNet(nn.Module):
+        def __init__(self, cell: str, n_features: int, hidden: int, layers: int, dropout: float, n_classes: int):
+            super().__init__()
+            rnn_cls = nn.GRU if cell == 'gru' else nn.LSTM
+            self.rnn = rnn_cls(n_features, hidden, layers, batch_first=True,
+                               dropout=dropout if layers > 1 else 0.0)
+            self.head = nn.Sequential(nn.LayerNorm(hidden), nn.Dropout(dropout), nn.Linear(hidden, n_classes))
+
+        def forward(self, x):                      # x: (batch, window, features)
+            out, _ = self.rnn(x)
+            return self.head(out[:, -1, :])
+
+    class _TransformerNet(nn.Module):
+        def __init__(self, n_features: int, hidden: int, layers: int, dropout: float, n_classes: int, window: int):
+            super().__init__()
+            heads = 4 if hidden % 4 == 0 else 1
+            self.embed = nn.Linear(n_features, hidden)
+            self.pos = nn.Parameter(torch.zeros(1, window, hidden))
+            layer = nn.TransformerEncoderLayer(hidden, heads, dim_feedforward=hidden * 2,
+                                               dropout=dropout, batch_first=True)
+            self.encoder = nn.TransformerEncoder(layer, num_layers=max(1, layers))
+            self.head = nn.Sequential(nn.LayerNorm(hidden * 2), nn.Dropout(dropout), nn.Linear(hidden * 2, n_classes))
+
+        def forward(self, x):
+            h = self.encoder(self.embed(x) + self.pos[:, -x.shape[1]:, :])
+            return self.head(torch.cat([h[:, -1, :], h.mean(dim=1)], dim=1))
+
+
+class SequenceModel(DirectionModel):
+    """Classifier over a window of the most recent `window` candles."""
+
+    def __init__(self, name: str, n_classes: int, timeframe: str):
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("PyTorch is not installed; sequence models are unavailable")
+        super().__init__(n_classes, timeframe)
+        self.name = name
+        self.window = self.config.window_for(timeframe)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        logger.info(f"Using device: {self.device}")
-    
-    def prepare_data(self, X, y, train_ratio: float = None) -> Dict:
-        """
-        Prepare and scale data for training using an 80/20 split (by default
-        or per config). Uses pandas `.iloc` when available to preserve indices.
 
-        Returns tensors (moved to device), scalers, a combined DataLoader,
-        and train_size.
-        """
-        # Determine train ratio: use provided or config default (80%)
-        if train_ratio is None:
-            train_ratio = getattr(self.config.app_config, 'train_test_split', 0.8)
+    def min_history(self) -> int:
+        return self.window - 1
 
-        # Prefer pandas slicing when possible to preserve `.iloc` semantics
-        try:
-            import pandas as pd
-        except Exception:
-            pd = None
+    def _build(self, n_features: int):
+        cfg = self.config
+        if self.name == 'transformer':
+            return _TransformerNet(n_features, cfg.hidden_dim, max(2, cfg.num_layers), cfg.dropout,
+                                   self.n_classes, self.window)
+        return _RNNNet(self.name, n_features, cfg.hidden_dim, cfg.num_layers, cfg.dropout, self.n_classes)
 
-        if pd is not None and hasattr(X, 'iloc'):
-            length = len(X)
-            train_size = int(train_ratio * length)
-            X_train = X.iloc[:train_size]
-            X_test = X.iloc[train_size:]
-            y_train = y.iloc[:train_size]
-            y_test = y.iloc[train_size:]
-            # Convert to numpy for scalers
-            X_train_arr = X_train.values
-            X_test_arr = X_test.values
-            y_train_arr = y_train.values
-            y_test_arr = y_test.values
-        else:
-            X_arr = np.asarray(X)
-            y_arr = np.asarray(y)
-            length = X_arr.shape[0]
-            train_size = int(train_ratio * length)
-            X_train_arr = X_arr[:train_size]
-            X_test_arr = X_arr[train_size:]
-            y_train_arr = y_arr[:train_size]
-            y_test_arr = y_arr[train_size:]
+    def _windows(self, Xt, idx: np.ndarray):
+        offsets = torch.arange(-self.window + 1, 1, device=Xt.device)
+        rows = torch.as_tensor(idx, device=Xt.device).unsqueeze(1) + offsets
+        return Xt[rows]                                           # (batch, window, features)
 
-        # Scale data (Min-Max)
-        scaler_X = MinMaxScaler()
-        scaler_y = MinMaxScaler()
+    def _usable(self, idx: np.ndarray) -> np.ndarray:
+        return idx[idx >= self.window - 1]
 
-        X_train_scaled = scaler_X.fit_transform(X_train_arr)
-        X_test_scaled = scaler_X.transform(X_test_arr)
-        y_train_scaled = scaler_y.fit_transform(y_train_arr if y_train_arr.ndim > 1 else y_train_arr.reshape(-1, 1))
-        y_test_scaled = scaler_y.transform(y_test_arr if y_test_arr.ndim > 1 else y_test_arr.reshape(-1, 1))
+    def fit(self, X, y, fit_idx, val_idx=None, cancel_check=None):
+        cfg = self.config
+        torch.manual_seed(cfg.seed)
+        rng = np.random.default_rng(cfg.seed)
 
-        # Convert to tensors (move to device)
-        X_train_tensor = torch.tensor(X_train_scaled, dtype=torch.float32).to(self.device)
-        y_train_tensor = torch.tensor(y_train_scaled, dtype=torch.float32).to(self.device)
-        X_test_tensor = torch.tensor(X_test_scaled, dtype=torch.float32).to(self.device)
-        y_test_tensor = torch.tensor(y_test_scaled, dtype=torch.float32).to(self.device)
+        fit_idx = self._usable(fit_idx)
+        val_idx = self._usable(val_idx) if val_idx is not None else np.array([], dtype=int)
+        if len(fit_idx) < 50:
+            raise ValueError(f"Not enough rows to train {self.name} (have {len(fit_idx)})")
 
-        # Combined tensors for DataLoader
-        combined_X = np.concatenate((X_train_scaled, X_test_scaled), axis=0)
-        combined_y = np.concatenate((y_train_scaled, y_test_scaled), axis=0)
-        X_tensor = torch.tensor(combined_X, dtype=torch.float32).to(self.device)
-        y_tensor = torch.tensor(combined_y, dtype=torch.float32).view(-1, 1).to(self.device)
+        # Scale with statistics from rows the model is allowed to see.
+        visible_end = fit_idx.max() + 1
+        self.scaler = StandardScaler().fit(X[:visible_end])
+        Xt = torch.as_tensor(np.clip(self.scaler.transform(X), -8, 8), dtype=torch.float32, device=self.device)
+        yt = torch.as_tensor(np.nan_to_num(y, nan=0).astype(np.int64), device=self.device)
 
-        # DataLoader (use config batch_size if available)
-        batch_size = getattr(self.config.app_config, 'batch_size', 64)
-        seed = getattr(self.config.app_config, 'seed', 42)
-        dataset = TensorDataset(X_tensor, y_tensor)
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                                generator=torch.Generator().manual_seed(int(seed)))
+        self.net = self._build(X.shape[1]).to(self.device)
+        weights = torch.as_tensor(balanced_class_weights(y[fit_idx], self.n_classes),
+                                  dtype=torch.float32, device=self.device)
+        criterion = nn.CrossEntropyLoss(weight=weights)
+        optimizer = torch.optim.AdamW(self.net.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
 
-        data = {
-            'X_train': X_train_tensor,
-            'y_train': y_train_tensor,
-            'X_test': X_test_tensor,
-            'y_test': y_test_tensor,
-            'X_tensor': X_tensor,
-            'y_tensor': y_tensor,
-            'scaler_X': scaler_X,
-            'scaler_y': scaler_y,
-            'dataloader': dataloader,
-            'train_size': train_size
-        }
-
-        self.scalers['X'] = scaler_X
-        self.scalers['y'] = scaler_y
-
-        return data
-    
-    def train_model(self, 
-                    model_type: str, 
-                    data: Dict,
-                    epochs: Optional[int] = None,
-                    learning_rate: Optional[float] = None,
-                    verbose: bool = True) -> nn.Module:
-        """
-        Train a specific model.
-        
-        Args:
-            model_type: Type of model ('gru', 'lstm', 'hybrid_lstm', 'hybrid_gru').
-            data: Prepared data dictionary from prepare_data().
-            epochs: Number of training epochs.
-            learning_rate: Learning rate.
-            verbose: Whether to print progress.
-            
-        Returns:
-            Trained model.
-        """
-        if model_type not in self.MODEL_CLASSES:
-            raise ValueError(f"Unknown model type: {model_type}. Available: {list(self.MODEL_CLASSES.keys())}")
-
-        input_dim = data['X_train'].shape[1]
-        hidden_dim = getattr(self.config.app_config, 'hidden_dim', 64)
-        num_layers = getattr(self.config.app_config, 'num_layers', 2)
-
-        # Set default hyperparameters based on model type
-        if epochs is None:
-            if model_type in ['gru', 'lstm']:
-                epochs = getattr(self.config.app_config, 'gru_epochs', 100)
-            else:
-                epochs = getattr(self.config.app_config, 'transformer_epochs', 200)
-
-        if learning_rate is None:
-            if model_type in ['gru', 'lstm']:
-                learning_rate = getattr(self.config.app_config, 'learning_rate', 0.001)
-            else:
-                learning_rate = getattr(self.config.app_config, 'transformer_learning_rate', 0.0005)
-
-        # Initialize model
-        if model_type == 'gru':
-            model = GRUModel(input_dim, hidden_dim=hidden_dim, num_layers=num_layers).to(self.device)
-        elif model_type == 'lstm':
-            model = LSTMModel(input_dim, hidden_dim=hidden_dim, num_layers=num_layers).to(self.device)
-        elif model_type == 'hybrid_lstm':
-            model = HybridTransformerLSTM(
-                input_dim,
-                hidden_dim=max(64, hidden_dim),
-                lstm_hidden_dim=hidden_dim,
-                lstm_layers=num_layers
-            ).to(self.device)
-        elif model_type == 'hybrid_gru':
-            model = HybridTransformerGRU(
-                input_dim,
-                hidden_dim=max(64, hidden_dim),
-                gru_hidden_dim=hidden_dim,
-                gru_layers=num_layers
-            ).to(self.device)
-        else:
-            model = self.MODEL_CLASSES[model_type](input_dim).to(self.device)
-
-        # Optimizer and loss
-        if model_type in ['hybrid_lstm', 'hybrid_gru']:
-            optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-        else:
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
-        criterion = nn.MSELoss()
-
-        # Training loop (GRU/LSTM on raw tensors, transformer models using DataLoader)
-        logger.info(f"Training {model_type.upper()} model for {epochs} epochs...")
-
-        if model_type in ['hybrid_lstm', 'hybrid_gru']:
-            train_loader = data.get('dataloader')
-            if train_loader is None:
-                train_dataset = TensorDataset(data['X_train'], data['y_train'])
-                train_loader = DataLoader(train_dataset, batch_size=getattr(self.config.app_config, 'batch_size', 64), shuffle=True)
-
-            for epoch in range(epochs):
-                model.train()
-                total_loss = 0.0
-                for batch_X, batch_y in train_loader:
-                    optimizer.zero_grad()
-                    outputs = model(batch_X)
-                    loss = criterion(outputs, batch_y)
-                    loss.backward()
-                    optimizer.step()
-                    total_loss += loss.item()
-
-                if verbose and (epoch + 1) % max(1, epochs // 10) == 0:
-                    logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss / max(1, len(train_loader)):.6f}")
-        else:
-            X_train_tensor = data['X_train']
-            y_train_tensor = data['y_train']
-
-            for epoch in range(epochs):
-                model.train()
+        best_loss, best_state, bad_epochs = float('inf'), None, 0
+        for epoch in range(cfg.epochs):
+            if cancel_check:
+                cancel_check()
+            self.net.train()
+            order = rng.permutation(fit_idx)
+            for start in range(0, len(order), cfg.batch_size):
+                batch = order[start:start + cfg.batch_size]
                 optimizer.zero_grad()
-                y_pred = model(X_train_tensor)
-                loss = criterion(y_pred, y_train_tensor)
+                loss = criterion(self.net(self._windows(Xt, batch)), yt[batch])
                 loss.backward()
+                nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)
                 optimizer.step()
 
-                if verbose and (epoch + 1) % max(1, epochs // 10) == 0:
-                    logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item():.6f}")
-        
-        model.eval()
-        self.models[model_type] = model
-        logger.info(f"{model_type.upper()} model training complete")
-        
-        return model
-    
-    def train_all_models(self, data: Dict, verbose: bool = True) -> Dict[str, nn.Module]:
-        """
-        Train all available models.
-        
-        Args:
-            data: Prepared data dictionary.
-            verbose: Whether to print progress.
-            
-        Returns:
-            Dictionary of trained models.
-        """
-        for model_type in self.MODEL_CLASSES.keys():
-            self.train_model(model_type, data, verbose=verbose)
-        
-        return self.models
-    
-    def predict(self, 
-                model_type: str, 
-                X: torch.Tensor,
-                inverse_transform: bool = True) -> np.ndarray:
-        """
-        Make predictions using a trained model.
-        
-        Args:
-            model_type: Type of model.
-            X: Input features (scaled).
-            inverse_transform: Whether to inverse transform predictions.
-            
-        Returns:
-            Predictions array.
-        """
-        if model_type not in self.models:
-            raise ValueError(f"Model {model_type} not trained. Train it first.")
-        
-        model = self.models[model_type]
-        model.eval()
+            if len(val_idx) == 0:
+                continue
+            val_loss = self._loss(Xt, yt, val_idx, criterion)
+            if val_loss < best_loss - 1e-4:
+                best_loss, best_state, bad_epochs = val_loss, copy.deepcopy(self.net.state_dict()), 0
+            else:
+                bad_epochs += 1
+                if bad_epochs >= cfg.patience:
+                    logger.info("%s early stop at epoch %d (val loss %.4f)", self.name, epoch + 1, best_loss)
+                    break
 
+        if best_state is not None:
+            self.net.load_state_dict(best_state)
+        self.net.eval()
+        return self
+
+    def _loss(self, Xt, yt, idx, criterion) -> float:
+        self.net.eval()
+        total, count = 0.0, 0
         with torch.no_grad():
-            # use detach().cpu().numpy() to match the expected output format
-            predictions = model(X).detach().cpu().numpy()
+            for start in range(0, len(idx), 1024):
+                batch = idx[start:start + 1024]
+                total += criterion(self.net(self._windows(Xt, batch)), yt[batch]).item() * len(batch)
+                count += len(batch)
+        return total / max(count, 1)
 
-        if inverse_transform and 'y' in self.scalers:
-            predictions = self.scalers['y'].inverse_transform(predictions)
+    def predict_proba(self, X, idx):
+        idx = np.asarray(idx)
+        out = np.full((len(idx), self.n_classes), 1.0 / self.n_classes)
+        ok = idx >= self.window - 1
+        if not ok.any():
+            return out
+        Xt = torch.as_tensor(np.clip(self.scaler.transform(X), -8, 8), dtype=torch.float32, device=self.device)
+        self.net.eval()
+        preds = []
+        with torch.no_grad():
+            usable = idx[ok]
+            for start in range(0, len(usable), 1024):
+                logits = self.net(self._windows(Xt, usable[start:start + 1024]))
+                preds.append(torch.softmax(logits, dim=1).cpu().numpy())
+        out[ok] = np.concatenate(preds)
+        return out
 
-        return predictions
-    
-    def predict_all(self, X: torch.Tensor, inverse_transform: bool = True) -> Dict[str, np.ndarray]:
-        """
-        Make predictions using all trained models.
-        
-        Args:
-            X: Input features.
-            inverse_transform: Whether to inverse transform predictions.
-            
-        Returns:
-            Dictionary of predictions by model type.
-        """
-        # Map internal model keys to human-friendly display names
-        display_names = {
-            'gru': 'Bi-GRU',
-            'lstm': 'Bi-LSTM',
-            'hybrid_lstm': 'Hybrid Transformer + LSTM',
-            'hybrid_gru': 'Hybrid Transformer + GRU'
-        }
+    def save(self, path: Path) -> None:
+        torch.save({
+            'name': self.name, 'n_classes': self.n_classes, 'timeframe': self.timeframe,
+            'window': self.window, 'n_features': int(self.scaler.n_features_in_),
+            'hparams': {k: getattr(self.config, k) for k in ('hidden_dim', 'num_layers', 'dropout')},
+            'scaler': self.scaler, 'state_dict': self.net.state_dict(),
+        }, path)
 
-        predictions = {}
-        for model_type in self.models.keys():
-            name = display_names.get(model_type, model_type)
-            predictions[name] = self.predict(model_type, X, inverse_transform)
+    @classmethod
+    def load_checkpoint(cls, path: Path) -> 'SequenceModel':
+        ckpt = torch.load(path, map_location='cpu', weights_only=False)
+        model = cls(ckpt['name'], ckpt['n_classes'], ckpt['timeframe'])
+        model.window = ckpt['window']
+        model.scaler = ckpt['scaler']
+        # Rebuild with the hyperparameters used at training time, not the current config.
+        saved = copy.copy(model.config)
+        for k, v in ckpt['hparams'].items():
+            setattr(saved, k, v)
+        model.config = saved
+        model.net = model._build(ckpt['n_features']).to(model.device)
+        model.net.load_state_dict(ckpt['state_dict'])
+        model.net.eval()
+        return model
 
-        return predictions
-    
-    def save_models(self, directory: Optional[str] = None) -> None:
-        """
-        Save all trained models to disk.
-        
-        Args:
-            directory: Directory to save models. Uses config output_dir if None.
-        """
-        if directory is None:
-            directory = self.config.get_output_path("models")
-        
-        Path(directory).mkdir(parents=True, exist_ok=True)
-        
-        for model_type, model in self.models.items():
-            path = Path(directory) / f"{model_type}_model.pt"
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'model_class': model.__class__.__name__,
-                'input_dim': model.fc.in_features if hasattr(model, 'fc') else None
-            }, path)
-            logger.info(f"Saved {model_type} model to {path}")
-        
-        # Save scalers
-        import pickle
-        scalers_path = Path(directory) / "scalers.pkl"
-        with open(scalers_path, 'wb') as f:
-            pickle.dump(self.scalers, f)
-        logger.info(f"Saved scalers to {scalers_path}")
-    
-    def load_models(self, directory: Optional[str] = None, input_dim: int = None) -> None:
-        """
-        Load models from disk.
-        
-        Args:
-            directory: Directory containing saved models.
-            input_dim: Input dimension for model initialization.
-        """
-        if directory is None:
-            directory = self.config.get_output_path("models")
-        
-        directory = Path(directory)
-        
-        for model_type, model_class in self.MODEL_CLASSES.items():
-            path = directory / f"{model_type}_model.pt"
-            if path.exists():
-                checkpoint = torch.load(path, map_location=self.device)
-                dim = input_dim or checkpoint.get('input_dim', 41)
-                model = model_class(dim).to(self.device)
-                model.load_state_dict(checkpoint['model_state_dict'])
-                model.eval()
-                self.models[model_type] = model
-                logger.info(f"Loaded {model_type} model from {path}")
-        
-        # Load scalers
-        import pickle
-        scalers_path = directory / "scalers.pkl"
-        if scalers_path.exists():
-            with open(scalers_path, 'rb') as f:
-                self.scalers = pickle.load(f)
-            logger.info(f"Loaded scalers from {scalers_path}")
+
+# ============================================
+# Factory / persistence
+# ============================================
+
+def create_model(name: str, n_classes: int, timeframe: str) -> DirectionModel:
+    if name == 'gbm':
+        return GBMModel(n_classes, timeframe)
+    if name == 'logreg':
+        return LogRegModel(n_classes, timeframe)
+    if name in SEQUENCE_MODELS:
+        return SequenceModel(name, n_classes, timeframe)
+    raise ValueError(f"Unknown model '{name}'. Available: {list(MODEL_INFO)}")
+
+
+def save_model(model: DirectionModel, directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (f"{model.name}.pt" if isinstance(model, SequenceModel) else f"{model.name}.pkl")
+    model.save(path)
+    return path
+
+
+def load_model(directory: Path, name: str) -> DirectionModel:
+    if name in SEQUENCE_MODELS:
+        return SequenceModel.load_checkpoint(directory / f"{name}.pt")
+    return DirectionModel.load(directory / f"{name}.pkl")
+
+
+def ensemble_proba(probas: List[np.ndarray]) -> np.ndarray:
+    return np.mean(np.stack(probas), axis=0)
