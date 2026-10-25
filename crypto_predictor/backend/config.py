@@ -1,210 +1,254 @@
 """
 Configuration management for CryptoPredictor.
-Handles dynamic cryptocurrency selection and application settings.
+
+The predictor is a *direction classifier*: for every supported timeframe
+(1h, 4h, 1d) it estimates whether the next candle will close up, down or
+roughly flat (neutral) relative to the current close.
 """
 
-import os
-from pathlib import Path
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional
-from datetime import datetime
 import json
 import logging
+from dataclasses import dataclass, field, fields, asdict
+from pathlib import Path
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================
+# Timeframes
+# ============================================
+
+@dataclass(frozen=True)
+class TimeframeSpec:
+    """Static properties of a candle timeframe."""
+    name: str
+    minutes: int
+    history_days: int          # how much history to download by default
+    neutral_threshold: float   # |log return| below this is labelled "neutral"
+    window: int                # sequence length (in candles) for GRU/LSTM/Transformer
+
+    @property
+    def millis(self) -> int:
+        return self.minutes * 60 * 1000
+
+    @property
+    def bars_per_year(self) -> float:
+        return 365 * 24 * 60 / self.minutes
+
+
+TIMEFRAMES: Dict[str, TimeframeSpec] = {
+    '1h': TimeframeSpec('1h', 60, history_days=730, neutral_threshold=0.0025, window=48),
+    '4h': TimeframeSpec('4h', 240, history_days=2190, neutral_threshold=0.005, window=42),
+    '1d': TimeframeSpec('1d', 1440, history_days=3000, neutral_threshold=0.01, window=30),
+}
+
+
+def get_timeframe(name: str) -> TimeframeSpec:
+    if name not in TIMEFRAMES:
+        raise ValueError(f"Unsupported timeframe '{name}'. Supported: {list(TIMEFRAMES)}")
+    return TIMEFRAMES[name]
+
+
+# ============================================
+# Assets
+# ============================================
 
 @dataclass
 class CryptoConfig:
     """Configuration for a single cryptocurrency."""
     symbol: str
-    ticker: str
     name: str
+    binance_symbol: str
+    yf_ticker: str
     enabled: bool = True
 
 
-@dataclass
-class AppConfig:
-    """Main application configuration."""
-    
-    # Date range settings
-    start_date: str = "2018-02-01"
-    end_date: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
-    
-    # Model settings
-    train_test_split: float = 0.8
-    batch_size: int = 64
-    gru_epochs: int = 200
-    lstm_epochs: int = 200
-    transformer_epochs: int = 200
-    hidden_dim: int = 64
-    num_layers: int = 2
-    learning_rate: float = 0.001
-    transformer_learning_rate: float = 0.0005
-    
-    # Lag features
-    price_lag_days: int = 7
-    volume_lag_days: int = 1
-    fgi_lag_days: int = 7
-    market_cap_lag_days: int = 1
-    
-    # Technical indicators
-    rsi_window: int = 14
-    macd_fast: int = 12
-    macd_slow: int = 26
-    macd_signal: int = 9
-    
-    # Output settings - Cross-platform compatible
-    output_dir: str = field(default_factory=lambda: str(Path.home() / "crypto_predictor_output"))
-    
-    # API rate limiting
-    api_delay_seconds: float = 1.2
-
-# Available cryptocurrencies
+# Stablecoins (e.g. USDT) are intentionally not listed: there is no direction to predict.
 DEFAULT_CRYPTOCURRENCIES: List[CryptoConfig] = [
-    CryptoConfig("BTC", "BTC-USD", "Bitcoin", enabled=True),
-    CryptoConfig("ETH", "ETH-USD", "Ethereum", enabled=True),
-    CryptoConfig("XRP", "XRP-USD", "Ripple", enabled=True),
-    CryptoConfig("SOL", "SOL-USD", "Solana", enabled=True),
-    CryptoConfig("USDT", "USDT-USD", "Tether", enabled=True),
-    CryptoConfig("BNB", "BNB-USD", "Binance Coin", enabled=True),
-    CryptoConfig("VTHO", "VTHO-USD", "VeThor Token", enabled=True),
-    CryptoConfig("SEI", "SEI-USD", "Sei", enabled=True),
-    CryptoConfig("APT", "APT21794-USD", "Aptos", enabled=True),
-    CryptoConfig("FET", "FET-USD", "Fetch.ai", enabled=True),
-    CryptoConfig("NEAR", "NEAR-USD", "NEAR Protocol", enabled=True),
-    CryptoConfig("RENDER", "RENDER-USD", "Render Token", enabled=True),
-    CryptoConfig("GALA", "GALA-USD", "Gala", enabled=True),
-    CryptoConfig("ARB", "ARB11841-USD", "Arbitrum", enabled=True),
-    CryptoConfig("ZEC", "ZEC-USD", "Zcash", enabled=True),
-    CryptoConfig("IMX", "IMX-USD", "Immutable X", enabled=True),
-    CryptoConfig("LINK", "LINK-USD", "Chainlink", enabled=True),
+    CryptoConfig("BTC", "Bitcoin", "BTCUSDT", "BTC-USD"),
+    CryptoConfig("ETH", "Ethereum", "ETHUSDT", "ETH-USD"),
+    CryptoConfig("XRP", "Ripple", "XRPUSDT", "XRP-USD"),
+    CryptoConfig("SOL", "Solana", "SOLUSDT", "SOL-USD"),
+    CryptoConfig("BNB", "Binance Coin", "BNBUSDT", "BNB-USD"),
+    CryptoConfig("VTHO", "VeThor Token", "VTHOUSDT", "VTHO-USD"),
+    CryptoConfig("SEI", "Sei", "SEIUSDT", "SEI-USD"),
+    CryptoConfig("APT", "Aptos", "APTUSDT", "APT21794-USD"),
+    CryptoConfig("FET", "Fetch.ai", "FETUSDT", "FET-USD"),
+    CryptoConfig("NEAR", "NEAR Protocol", "NEARUSDT", "NEAR-USD"),
+    CryptoConfig("RENDER", "Render Token", "RENDERUSDT", "RENDER-USD"),
+    CryptoConfig("GALA", "Gala", "GALAUSDT", "GALA-USD"),
+    CryptoConfig("ARB", "Arbitrum", "ARBUSDT", "ARB11841-USD"),
+    CryptoConfig("ZEC", "Zcash", "ZECUSDT", "ZEC-USD"),
+    CryptoConfig("IMX", "Immutable X", "IMXUSDT", "IMX-USD"),
+    CryptoConfig("LINK", "Chainlink", "LINKUSDT", "LINK-USD"),
 ]
 
-# Global market indices
+# Daily macro context (fetched from Yahoo Finance when available).
 MARKET_INDICES: Dict[str, str] = {
     "^GSPC": "SP500",
     "^IXIC": "NASDAQ",
-    "^DJI": "DJIA",
-    "^FTSE": "FTSE100",
-    "^GDAXI": "DAX",
-    "^N225": "Nikkei",
-    "000001.SS": "Shanghai",
-    "^HSI": "HangSeng",
     "DX-Y.NYB": "DXY",
     "^VIX": "VIX",
 }
 
+MODEL_NAMES = ['gbm', 'logreg', 'gru', 'lstm', 'transformer']
+DEFAULT_MODELS = ['gbm', 'logreg', 'gru']
+
+
+@dataclass
+class AppConfig:
+    """User-tunable application settings."""
+
+    # Data
+    data_source: str = 'auto'              # 'auto' (Binance, then Yahoo), 'binance', 'yfinance'
+    use_btc_context: bool = True           # add BTC features when predicting an altcoin
+    use_macro: bool = True                 # add daily stock-index / Fear & Greed features
+
+    # Labels
+    label_mode: str = 'ternary'            # 'ternary' (down/neutral/up) or 'binary' (down/up)
+    horizon_bars: int = 1                  # predict the move over the next N candles
+    neutral_thresholds: Dict[str, float] = field(
+        default_factory=lambda: {k: v.neutral_threshold for k, v in TIMEFRAMES.items()}
+    )
+
+    # Features
+    return_lags: int = 6
+    rsi_window: int = 14
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    atr_window: int = 14
+    bb_window: int = 20
+
+    # Evaluation (walk-forward)
+    walk_forward_splits: int = 4
+    initial_train_frac: float = 0.6
+    val_frac: float = 0.15                 # tail of each training fold used for early stopping
+
+    # Neural network models
+    hidden_dim: int = 64
+    num_layers: int = 1
+    dropout: float = 0.2
+    epochs: int = 40
+    patience: int = 6
+    batch_size: int = 256
+    learning_rate: float = 0.001
+    weight_decay: float = 0.0001
+    windows: Dict[str, int] = field(
+        default_factory=lambda: {k: v.window for k, v in TIMEFRAMES.items()}
+    )
+
+    # Gradient boosting
+    gbm_estimators: int = 400
+    gbm_learning_rate: float = 0.03
+    gbm_num_leaves: int = 15
+
+    # Backtest
+    fee_bps: float = 10.0                  # per side, in basis points (10 = 0.1%)
+    min_confidence: float = 0.0            # trade only when P(direction) >= this
+    allow_short: bool = True
+
+    seed: int = 42
+    output_dir: str = field(default_factory=lambda: str(Path.home() / "crypto_predictor_output"))
+
+    def threshold_for(self, timeframe: str) -> float:
+        return float(self.neutral_thresholds.get(timeframe, get_timeframe(timeframe).neutral_threshold))
+
+    def window_for(self, timeframe: str) -> int:
+        return int(self.windows.get(timeframe, get_timeframe(timeframe).window))
+
+    def update(self, values: Dict) -> None:
+        """Apply a partial update, coercing each value to the field's current type."""
+        known = {f.name for f in fields(self)}
+        for key, value in (values or {}).items():
+            if key not in known or value is None:
+                continue
+            current = getattr(self, key)
+            try:
+                if isinstance(current, bool):
+                    value = value if isinstance(value, bool) else str(value).lower() in ('1', 'true', 'yes', 'on')
+                elif isinstance(current, int):
+                    value = int(value)
+                elif isinstance(current, float):
+                    value = float(value)
+                elif isinstance(current, dict):
+                    if not isinstance(value, dict):
+                        continue
+                    merged = dict(current)
+                    merged.update({k: type(next(iter(current.values()), 0.0))(v) for k, v in value.items()
+                                   if k in TIMEFRAMES})
+                    value = merged
+                else:
+                    value = str(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid value for '{key}': {value!r}")
+            setattr(self, key, value)
+        self.validate()
+
+    def validate(self) -> None:
+        if self.data_source not in ('auto', 'binance', 'yfinance'):
+            raise ValueError("data_source must be 'auto', 'binance' or 'yfinance'")
+        if self.label_mode not in ('ternary', 'binary'):
+            raise ValueError("label_mode must be 'ternary' or 'binary'")
+        if not 1 <= self.horizon_bars <= 24:
+            raise ValueError("horizon_bars must be between 1 and 24")
+        if not 2 <= self.walk_forward_splits <= 10:
+            raise ValueError("walk_forward_splits must be between 2 and 10")
+        if not 0.3 <= self.initial_train_frac <= 0.9:
+            raise ValueError("initial_train_frac must be between 0.3 and 0.9")
+        if not 0.0 <= self.min_confidence < 1.0:
+            raise ValueError("min_confidence must be in [0, 1)")
+
+
 class ConfigManager:
     """Manages application configuration with persistence."""
-    
+
+    CONFIG_FILENAME = "config_v2.json"  # v1 (price regression) files are left untouched
+
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = config_path or self._get_default_config_path()
         self.app_config = AppConfig()
-        self.cryptocurrencies = DEFAULT_CRYPTOCURRENCIES.copy()
+        self.cryptocurrencies = [CryptoConfig(**asdict(c)) for c in DEFAULT_CRYPTOCURRENCIES]
         self._load_config()
-    
-    @staticmethod
-    def _get_default_config_path() -> str:
-        """Get the default config file path (cross-platform)."""
+
+    @classmethod
+    def _get_default_config_path(cls) -> str:
         config_dir = Path.home() / ".crypto_predictor"
         config_dir.mkdir(parents=True, exist_ok=True)
-        return str(config_dir / "config.json")
-    
+        return str(config_dir / cls.CONFIG_FILENAME)
+
     def _load_config(self) -> None:
-        """Load configuration from file if it exists."""
         try:
-            if os.path.exists(self.config_path):
-                with open(self.config_path, 'r') as f:
-                    data = json.load(f)
-                    
-                # Update app config
-                if 'app_config' in data:
-                    for key, value in data['app_config'].items():
-                        if hasattr(self.app_config, key):
-                            setattr(self.app_config, key, value)
-                if 'cryptocurrencies' in data:
-                    logger.info("Ignoring persisted 'cryptocurrencies' in %s; using DEFAULT_CRYPTOCURRENCIES instead", self.config_path)
+            path = Path(self.config_path)
+            if path.exists():
+                data = json.loads(path.read_text())
+                self.app_config.update(data.get('app_config', {}))
         except Exception as e:
-            print(f"Warning: Could not load config from {self.config_path}: {e}")
-    
+            logger.warning("Could not load config from %s: %s", self.config_path, e)
+            self.app_config = AppConfig()
+
     def save_config(self) -> None:
-        """Save current configuration to file."""
         try:
-            # Log the current app_config when saving (helpful when frontend sends overrides)
-            try:
-                logger.info("Received configuration from frontend / saving config: %s", vars(self.app_config))
-            except Exception:
-                logger.info("Saving configuration (could not serialize AppConfig via vars)")
-            data = {
-                'app_config': {
-                    # Date range
-                    'start_date': self.app_config.start_date,
-                    'end_date': self.app_config.end_date,
-                    # Model training settings
-                    'train_test_split': self.app_config.train_test_split,
-                    'batch_size': self.app_config.batch_size,
-                    'gru_epochs': self.app_config.gru_epochs,
-                    'lstm_epochs': self.app_config.lstm_epochs,
-                    'transformer_epochs': self.app_config.transformer_epochs,
-                    # Model architecture
-                    'hidden_dim': self.app_config.hidden_dim,
-                    'num_layers': self.app_config.num_layers,
-                    'learning_rate': self.app_config.learning_rate,
-                    'transformer_learning_rate': self.app_config.transformer_learning_rate,
-                    # Feature engineering
-                    'price_lag_days': self.app_config.price_lag_days,
-                    'volume_lag_days': self.app_config.volume_lag_days,
-                    'fgi_lag_days': self.app_config.fgi_lag_days,
-                    'market_cap_lag_days': self.app_config.market_cap_lag_days,
-                    'rsi_window': self.app_config.rsi_window,
-                    'macd_fast': self.app_config.macd_fast,
-                    'macd_slow': self.app_config.macd_slow,
-                    'macd_signal': self.app_config.macd_signal,
-                    # Output
-                    'output_dir': self.app_config.output_dir,
-                    'api_delay_seconds': self.app_config.api_delay_seconds,
-                },
-                'cryptocurrencies': [
-                    {
-                        'symbol': c.symbol,
-                        'ticker': c.ticker,
-                        'name': c.name,
-                        'enabled': c.enabled
-                    }
-                    for c in self.cryptocurrencies
-                ]
-            }
-            
-            with open(self.config_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            Path(self.config_path).write_text(json.dumps({'app_config': asdict(self.app_config)}, indent=2))
         except Exception as e:
-            print(f"Warning: Could not save config to {self.config_path}: {e}")
-    
+            logger.warning("Could not save config to %s: %s", self.config_path, e)
+
     def get_enabled_cryptos(self) -> List[CryptoConfig]:
-        """Get list of enabled cryptocurrencies."""
         return [c for c in self.cryptocurrencies if c.enabled]
-    
-    def get_crypto_tickers(self) -> Dict[str, str]:
-        """Get dictionary of ticker -> symbol for enabled cryptos."""
-        return {c.ticker: c.symbol for c in self.get_enabled_cryptos()}
-    
-    def set_target_crypto(self, symbol: str) -> None:
-        """Set the target cryptocurrency for prediction."""
-        # Validate that the symbol exists
-        valid_symbols = [c.symbol for c in self.cryptocurrencies]
-        if symbol not in valid_symbols:
-            raise ValueError(f"Invalid symbol '{symbol}'. Valid symbols: {valid_symbols}")
-        self.target_symbol = symbol
-    
-    def get_output_path(self, filename: str) -> str:
-        """Get cross-platform output file path."""
-        output_dir = Path(self.app_config.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        return str(output_dir / filename)
+
+    def get_crypto(self, symbol: str) -> CryptoConfig:
+        for c in self.cryptocurrencies:
+            if c.symbol == symbol.upper():
+                return c
+        raise ValueError(f"Unknown symbol '{symbol}'. Valid symbols: {[c.symbol for c in self.cryptocurrencies]}")
+
+    def get_output_path(self, *parts: str) -> str:
+        path = Path(self.app_config.output_dir).joinpath(*parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
 
 
-# Global config instance
 _config_manager: Optional[ConfigManager] = None
 
 
