@@ -1,11 +1,20 @@
 """
-A/B test a feature group: run the same walk-forward analysis with and without
-support/resistance features on identical data and compare out-of-sample results.
+A/B test one change: run the same walk-forward analysis with the change off (A)
+and on (B) on identical data and compare out-of-sample results.
+
+Experiments:
+    sr         support / resistance features
+    htf        higher-timeframe context
+    futures    perpetual futures data (funding, premium, open interest)
+    drop_weak  leave weak moves (inside the neutral band) out of training
 
     cd crypto_predictor
-    python -m experiments.compare_features --symbol BTC --timeframes 1h 4h 1d
-    python -m experiments.compare_features --symbol ETH --models gbm logreg gru --folds 5
-    python -m experiments.compare_features --csv my_candles.csv --csv-timeframe 1h --timeframes 1h 4h
+    python -m experiments.compare_features --experiment futures --symbol BTC --timeframes 1h 4h 1d
+    python -m experiments.compare_features --experiment htf --symbol ETH --models gbm logreg gru --folds 5
+    python -m experiments.compare_features --experiment sr --csv candles.csv --csv-timeframe 1h --timeframes 1h 4h
+
+Every run also checks the weak-signal filter: are the signals it shows more
+accurate than the ones it hides?
 
 Differences are paired candle-by-candle (both variants predict the same
 candles), with 95% confidence intervals from a block bootstrap, since
@@ -28,7 +37,14 @@ from backend.config import get_config, get_timeframe, DEFAULT_MODELS
 from backend.data_fetcher import CryptoDataFetcher
 from backend.prediction_service import PredictionService
 
-VARIANTS = {'baseline': False, 'support_resistance': True}
+EXPERIMENTS = {
+    # name: (settings for A, settings for B, feature prefix shown in the importance check)
+    'sr': ({'use_support_resistance': False}, {'use_support_resistance': True}, 'sr_'),
+    'htf': ({'use_htf_context': False}, {'use_htf_context': True}, 'htf_'),
+    'futures': ({'use_futures': False}, {'use_futures': True}, 'fut_'),
+    'drop_weak': ({'label_mode': 'binary', 'drop_weak_moves': False},
+                  {'label_mode': 'binary', 'drop_weak_moves': True}, None),
+}
 
 
 class CsvFetcher:
@@ -91,14 +107,53 @@ def paired_comparison(a: pd.DataFrame, b: pd.DataFrame, models, classes, block: 
         acc_lo, acc_hi, acc_p = block_bootstrap_ci(correct_b - correct_a, block)
         ll_lo, ll_hi, ll_p = block_bootstrap_ci(ll_b - ll_a, block)
         out[name] = {
-            'accuracy_baseline': round(correct_a.mean(), 4),
-            'accuracy_sr': round(correct_b.mean(), 4),
+            'accuracy_a': round(correct_a.mean(), 4),
+            'accuracy_b': round(correct_b.mean(), 4),
             'accuracy_diff': round(correct_b.mean() - correct_a.mean(), 4),
             'accuracy_diff_ci95': [round(acc_lo, 4), round(acc_hi, 4)],
             'accuracy_p_value': round(acc_p, 3),
             'log_loss_diff': round(ll_b.mean() - ll_a.mean(), 4),   # negative = better
             'log_loss_diff_ci95': [round(ll_lo, 4), round(ll_hi, 4)],
         }
+    return out
+
+
+def filter_check(oos: pd.DataFrame, block: int) -> dict:
+    """Directional hit rate of the ensemble's shown signals vs the calls the filter hid."""
+    pred = oos['ensemble_pred'].to_numpy()
+    directional = np.isin(pred, ['up', 'down'])
+    hit = np.where(pred == 'up', oos['fwd_log_return'] > 0, oos['fwd_log_return'] < 0).astype(float)
+    shown = (oos['ensemble_signal'] != 'none').to_numpy()
+    hidden = directional & ~shown
+    out = {'shown': int(shown.sum()), 'hidden': int(hidden.sum()),
+           'shown_hit_rate': round(hit[shown].mean(), 4) if shown.any() else None,
+           'hidden_hit_rate': round(hit[hidden].mean(), 4) if hidden.any() else None}
+    if shown.sum() < 20 or hidden.sum() < 20:
+        return {**out, 'diff_ci95': None, 'verdict': 'TOO FEW SIGNALS'}
+    rng = np.random.default_rng(0)
+    n = len(hit)
+    up_hit = (oos['fwd_log_return'] > 0).to_numpy(float)
+    diffs, skill = [], []
+    for _ in range(1000):
+        starts = rng.integers(0, n - block + 1, size=int(np.ceil(n / block)))
+        idx = (starts[:, None] + np.arange(block)).ravel()[:n]
+        s_, h_ = shown[idx], hidden[idx]
+        if s_.any() and h_.any():
+            diffs.append(hit[idx][s_].mean() - hit[idx][h_].mean())
+            skill.append(hit[idx][s_].mean() - up_hit[idx][s_].mean())
+    lo, hi = np.percentile(diffs, [2.5, 97.5])
+    s_lo, s_hi = np.percentile(skill, [2.5, 97.5])
+    out['diff_ci95'] = [round(float(lo), 4), round(float(hi), 4)]
+    # A filter can look good by picking candles in rising stretches; compare with "always up" there too.
+    out['vs_always_up_ci95'] = [round(float(s_lo), 4), round(float(s_hi), 4)]
+    if lo > 0 and s_lo > 0:
+        out['verdict'] = 'SHOWN BETTER'
+    elif lo > 0:
+        out['verdict'] = 'SHOWN BETTER THAN HIDDEN, BUT NOT THAN ALWAYS-UP'
+    elif hi < 0:
+        out['verdict'] = 'SHOWN WORSE'
+    else:
+        out['verdict'] = 'NO SIGNIFICANT DIFFERENCE'
     return out
 
 
@@ -115,6 +170,7 @@ def verdict(cmp: dict) -> str:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--experiment', choices=list(EXPERIMENTS), default='sr')
     parser.add_argument('--symbol', default='BTC')
     parser.add_argument('--timeframes', nargs='+', default=['1h', '4h', '1d'])
     parser.add_argument('--models', nargs='+', default=DEFAULT_MODELS)
@@ -122,14 +178,17 @@ def main(argv=None):
     parser.add_argument('--label-mode', choices=['ternary', 'binary'])
     parser.add_argument('--csv', help='use candles from a CSV instead of downloading')
     parser.add_argument('--csv-timeframe', default='1h', help='timeframe of the CSV candles')
+    parser.add_argument('--set', action='append', default=[], metavar='KEY=JSON',
+                        help='override a setting for both variants, e.g. --set \'neutral_thresholds={"1h": 0.0005}\'')
     parser.add_argument('--out', help='write the full comparison as JSON')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
+    settings_a, settings_b, prefix = EXPERIMENTS[args.experiment]
 
     cfg = get_config().app_config
     saved = asdict(cfg)
-    cfg.output_dir = tempfile.mkdtemp(prefix='sr_experiment_')
+    cfg.output_dir = tempfile.mkdtemp(prefix=f'{args.experiment}_experiment_')
     if args.folds:
         cfg.walk_forward_splits = args.folds
     if args.label_mode:
@@ -138,37 +197,42 @@ def main(argv=None):
         fetcher = CsvFetcher(args.csv, args.csv_timeframe)
         cfg.use_btc_context = cfg.use_macro = False
     else:
-        fetcher = CryptoDataFetcher()  # one instance: both variants see the same cached candles
+        fetcher = CryptoDataFetcher()  # one instance: both variants see the same cached data
+    for item in args.set:
+        key, _, value = item.partition('=')
+        cfg.update({key: json.loads(value)})
+    common = {k: getattr(cfg, k) for k in asdict(cfg)}
 
-    report = {'symbol': args.symbol, 'models': args.models, 'label_mode': cfg.label_mode,
-              'source': args.csv or 'exchange', 'timeframes': {}}
+    report = {'experiment': args.experiment, 'symbol': args.symbol, 'models': args.models,
+              'source': args.csv or 'exchange', 'a': settings_a, 'b': settings_b, 'timeframes': {}}
     try:
         for tf in args.timeframes:
             runs = {}
-            for variant, flag in VARIANTS.items():
-                cfg.use_support_resistance = flag
+            for variant, settings in (('a', settings_a), ('b', settings_b)):
+                cfg.update({**common, **settings})
                 service = PredictionService(fetcher=fetcher)
-                print(f"[{tf}] running {variant}...", file=sys.stderr)
+                print(f"[{tf}] running {variant}: {settings}...", file=sys.stderr)
                 result = service.analyze(args.symbol, [tf], args.models)
                 if tf not in result['timeframes']:
                     raise RuntimeError(f"{tf} failed: {result['errors'].get(tf)}")
                 runs[variant] = (result['timeframes'][tf], service.oos[(result['symbol'], tf)])
 
-            base_res, base_oos = runs['baseline']
-            sr_res, sr_oos = runs['support_resistance']
-            block = max(5, min(48, len(base_oos) // 50))
-            cmp = paired_comparison(base_oos, sr_oos, args.models, base_res['label']['classes'], block)
+            (res_a, oos_a), (res_b, oos_b) = runs['a'], runs['b']
+            block = max(5, min(48, len(oos_a) // 50))
+            cmp = paired_comparison(oos_a, oos_b, args.models, res_a['label']['classes'], block)
             cmp['verdict'] = verdict(cmp)
-            cmp['backtest_return'] = {'baseline': base_res['backtest']['total_return'],
-                                      'support_resistance': sr_res['backtest']['total_return']}
+            cmp['backtest_return'] = {'a': res_a['backtest']['total_return'], 'b': res_b['backtest']['total_return']}
             cmp['directional_accuracy'] = {
-                name: {'baseline': base_res['metrics'][name]['directional_accuracy'],
-                       'support_resistance': sr_res['metrics'][name]['directional_accuracy']}
+                name: {'a': res_a['metrics'][name]['directional_accuracy'],
+                       'b': res_b['metrics'][name]['directional_accuracy']}
                 for name in args.models + ['ensemble']}
-            cmp['sr_features_in_top10'] = [f['feature'] for f in sr_res['feature_importance'][:10]
-                                           if f['feature'].startswith('sr_')]
+            cmp['shown_signals'] = {v: r['metrics']['ensemble']['signals'] for v, r in (('a', res_a), ('b', res_b))}
+            cmp['filter_check'] = {'a': filter_check(oos_a, block), 'b': filter_check(oos_b, block)}
+            cmp['notes'] = {'a': res_a['data']['notes'], 'b': res_b['data']['notes']}
+            cmp['group_features_in_top10'] = [f['feature'] for f in res_b['feature_importance'][:10]
+                                              if prefix and f['feature'].startswith(prefix)]
             report['timeframes'][tf] = cmp
-            print_table(tf, cmp, args.models)
+            print_table(tf, cmp, args.models, args.experiment)
     finally:
         cfg.update({k: v for k, v in saved.items()})
 
@@ -178,21 +242,30 @@ def main(argv=None):
     return report
 
 
-def print_table(tf: str, cmp: dict, models):
-    print(f"\n=== {tf}: {cmp['paired_candles']} out-of-sample candles -> {cmp['verdict']} ===")
-    print(f"{'model':<12}{'acc base':>10}{'acc +S/R':>10}{'diff':>8}  {'95% CI':<18}{'p':>6}"
-          f"{'dir base':>10}{'dir +S/R':>10}{'logloss Δ':>11}")
+def print_table(tf: str, cmp: dict, models, experiment: str):
+    print(f"\n=== {experiment} | {tf}: {cmp['paired_candles']} out-of-sample candles -> {cmp['verdict']} ===")
+    print("   (A = without, B = with; accuracy over every test candle, paired)")
+    print(f"{'model':<12}{'acc A':>8}{'acc B':>8}{'diff':>8}  {'95% CI':<18}{'p':>6}"
+          f"{'dir A':>8}{'dir B':>8}{'logloss Δ':>11}")
     for name in models + ['ensemble']:
         m, d = cmp[name], cmp['directional_accuracy'][name]
         ci = f"[{m['accuracy_diff_ci95'][0]:+.3f}, {m['accuracy_diff_ci95'][1]:+.3f}]"
         fmt = lambda v: '--' if v is None else f"{v:.3f}"
-        print(f"{name:<12}{m['accuracy_baseline']:>10.3f}{m['accuracy_sr']:>10.3f}{m['accuracy_diff']:>+8.3f}  "
-              f"{ci:<18}{m['accuracy_p_value']:>6.2f}{fmt(d['baseline']):>10}{fmt(d['support_resistance']):>10}"
-              f"{m['log_loss_diff']:>+11.4f}")
+        print(f"{name:<12}{m['accuracy_a']:>8.3f}{m['accuracy_b']:>8.3f}{m['accuracy_diff']:>+8.3f}  "
+              f"{ci:<18}{m['accuracy_p_value']:>6.2f}{fmt(d['a']):>8}{fmt(d['b']):>8}{m['log_loss_diff']:>+11.4f}")
     bt = cmp['backtest_return']
-    print(f"backtest (ensemble): baseline {bt['baseline']:+.1%}  vs  +S/R {bt['support_resistance']:+.1%}")
-    if cmp['sr_features_in_top10']:
-        print(f"S/R features in GBM top-10: {', '.join(cmp['sr_features_in_top10'])}")
+    print(f"backtest (ensemble, shown signals only): A {bt['a']:+.1%}  vs  B {bt['b']:+.1%}")
+    for v in ('a', 'b'):
+        sig, fc = cmp['shown_signals'][v], cmp['filter_check'][v]
+        pct = lambda x: '--' if x is None else f"{x:.1%}"
+        print(f"shown signals {v.upper()}: {sig['n']} ({pct(sig['coverage'])} of candles), hit {pct(sig['directional_accuracy'])}"
+              f" | always-up on same candles {pct(sig['always_up_same_candles'])}"
+              f" | hidden calls hit {pct(fc['hidden_hit_rate'])} -> filter: {fc['verdict']}")
+    if cmp['group_features_in_top10']:
+        print(f"group features in GBM top-10: {', '.join(cmp['group_features_in_top10'])}")
+    for v in ('a', 'b'):
+        for note in cmp['notes'][v]:
+            print(f"note {v.upper()}: {note}")
 
 
 if __name__ == '__main__':

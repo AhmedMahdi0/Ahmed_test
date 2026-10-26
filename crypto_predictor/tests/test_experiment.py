@@ -15,7 +15,7 @@ def test_block_bootstrap_detects_a_real_shift():
 def test_compare_features_runs_on_csv(tmp_path):
     csv = tmp_path / 'candles.csv'
     make_candles(3000, '1h').to_csv(csv)
-    report = main(['--csv', str(csv), '--csv-timeframe', '1h', '--timeframes', '1h', '4h',
+    report = main(['--experiment', 'htf', '--csv', str(csv), '--csv-timeframe', '1h', '--timeframes', '1h', '4h',
                    '--models', 'logreg', '--folds', '2', '--out', str(tmp_path / 'r.json')])
     for tf in ('1h', '4h'):
         cmp = report['timeframes'][tf]
