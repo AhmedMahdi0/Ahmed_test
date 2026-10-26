@@ -26,8 +26,8 @@ import pandas as pd
 from .config import get_config, get_timeframe, TIMEFRAMES, DEFAULT_MODELS
 from .data_fetcher import CryptoDataFetcher
 from .evaluation import (walk_forward_splits, split_train_val, classification_metrics,
-                         baseline_probas, backtest)
-from .feature_engineering import FeatureEngineer, Dataset
+                         baseline_probas, backtest, signal_scores, confidence_cutoff, signal_metrics)
+from .feature_engineering import FeatureEngineer, Dataset, HTF_MAP, resample_ohlcv
 from .models import (create_model, save_model, load_model, available_models, ensemble_proba,
                      MODEL_INFO, GBMModel)
 
@@ -119,7 +119,8 @@ class PredictionService:
                 if missing:
                     raise ValueError(f"Features changed since training ({missing[:3]}...). Re-run the analysis.")
                 X = ds.X[bundle['meta']['feature_columns']].to_numpy(dtype=np.float32)
-                out['signals'][tf] = self._signal(ds, X, bundle['models'], bundle['meta'].get('reliability'))
+                out['signals'][tf] = self._signal(ds, X, bundle['models'], bundle['meta'].get('reliability'),
+                                                  bundle['meta'].get('signal_cutoff', 0.0))
             except Exception as e:
                 out['errors'][tf] = str(e)
         return out
@@ -157,6 +158,7 @@ class PredictionService:
 
     def _dataset(self, symbol: str, tf: str) -> Dataset:
         cfg = self.config.app_config
+        notes = []
         ohlcv = self.fetcher.fetch_ohlcv(symbol, tf)
         btc = None
         if cfg.use_btc_context and symbol != 'BTC':
@@ -164,13 +166,34 @@ class PredictionService:
                 btc = self.fetcher.fetch_ohlcv('BTC', tf)
             except Exception as e:
                 logger.warning("BTC context unavailable: %s", e)
+                notes.append(f"BTC context unavailable: {e}")
         macro = None
         if cfg.use_macro:
             try:
                 macro = self.fetcher.fetch_macro()
             except Exception as e:
                 logger.warning("Macro context unavailable: %s", e)
-        ds = self.features.make_dataset(ohlcv, tf, btc=btc, macro=macro)
+        higher = None
+        if cfg.use_htf_context:
+            higher = {}
+            for htf in HTF_MAP[tf]:
+                try:
+                    if htf == '1w':
+                        higher[htf] = resample_ohlcv(self.fetcher.fetch_ohlcv(symbol, '1d'), '1w')
+                    else:
+                        higher[htf] = self.fetcher.fetch_ohlcv(symbol, htf)
+                except Exception as e:
+                    notes.append(f"{htf} context unavailable: {e}")
+        futures = None
+        if cfg.use_futures:
+            try:
+                futures = self.fetcher.fetch_futures(symbol, tf)
+                notes.extend(f"futures {w}" for w in futures.get('warnings', []))
+            except Exception as e:
+                logger.warning("Futures context unavailable: %s", e)
+                notes.append(f"futures data unavailable: {e}")
+        ds = self.features.make_dataset(ohlcv, tf, btc=btc, macro=macro, higher=higher, futures=futures)
+        ds.notes = notes + ds.notes
         ds.X.attrs['source'] = ohlcv.attrs.get('source')
         return ds
 
@@ -193,10 +216,19 @@ class PredictionService:
         persistence = ds.persistence.to_numpy()
         n_classes = len(ds.classes)
         purge = ds.horizon
+        names = model_names + ['ensemble']
+
+        # Weak moves (inside the neutral band) can be left out of training. Evaluation still
+        # covers every candle: whether a move will be weak is not known in advance.
+        strong = np.abs(np.nan_to_num(fwd)) > ds.threshold
+        train_rows = (lambda idx: idx[strong[idx]]) if cfg.drops_weak_moves else (lambda idx: idx)
+        keep = cfg.signal_keep_fraction if cfg.signal_filter else 1.0
 
         splits = walk_forward_splits(n, cfg.walk_forward_splits, cfg.initial_train_frac, purge)
         test_rows = np.concatenate([test for _, test in splits])
-        oos = {m: np.zeros((len(test_rows), n_classes)) for m in model_names}
+        oos = {m: np.zeros((len(test_rows), n_classes)) for m in names}
+        oos_signal = {m: np.zeros(len(test_rows), dtype=bool) for m in names}
+        cutoffs = {m: [] for m in names}
         base = {}
         total_steps = len(splits) * len(model_names) + len(model_names)
         step = 0
@@ -204,49 +236,70 @@ class PredictionService:
         offset = 0
         for k, (train_idx, test_idx) in enumerate(splits):
             fit_idx, val_idx = split_train_val(train_idx, cfg.val_frac, purge)
+            calib_idx = val_idx if len(val_idx) else fit_idx[-max(20, len(fit_idx) // 5):]
+            sl = slice(offset, offset + len(test_idx))
+            calib = {}
             for name in model_names:
                 cancel_check()
                 report(0.05 + 0.8 * step / total_steps, f"Walk-forward fold {k + 1}/{len(splits)}: {name}")
-                model = create_model(name, n_classes, tf).fit(X, y, fit_idx, val_idx, cancel_check=cancel_check)
-                oos[name][offset:offset + len(test_idx)] = model.predict_proba(X, test_idx)
+                model = create_model(name, n_classes, tf).fit(X, y, train_rows(fit_idx), train_rows(val_idx),
+                                                             cancel_check=cancel_check)
+                oos[name][sl] = model.predict_proba(X, test_idx)
+                calib[name] = model.predict_proba(X, calib_idx)
                 step += 1
+            oos['ensemble'][sl] = ensemble_proba([oos[m][sl] for m in model_names])
+            calib['ensemble'] = ensemble_proba([calib[m] for m in model_names])
+            for name in names:
+                # The cutoff comes from the validation period that precedes this test block.
+                cut = confidence_cutoff(calib[name], ds.classes, keep)
+                cutoffs[name].append(cut)
+                scores = signal_scores(oos[name][sl], ds.classes)
+                oos_signal[name][sl] = (scores > 0) & (scores >= cut)
             p = np.nan_to_num(persistence[test_idx], nan=1 if n_classes == 3 else 0)
             for bname, bproba in baseline_probas(y[train_idx], p, len(test_idx), ds.classes).items():
                 base.setdefault(bname, []).append(bproba)
             offset += len(test_idx)
 
-        oos['ensemble'] = ensemble_proba([oos[m] for m in model_names])
         base = {k: np.concatenate(v) for k, v in base.items()}
         y_test, fwd_test, next_test = y[test_rows], fwd[test_rows], next_ret[test_rows]
 
         metrics = {name: classification_metrics(y_test, proba, ds.classes, fwd_test)
                    for name, proba in {**oos, **base}.items()}
+        for name in names:
+            metrics[name]['signals'] = signal_metrics(oos[name], oos_signal[name], y_test, fwd_test,
+                                                      ds.classes, ds.threshold)
         bt_kwargs = dict(classes=ds.classes, bars_per_year=spec.bars_per_year, fee_bps=cfg.fee_bps,
                          min_confidence=cfg.min_confidence, allow_short=cfg.allow_short)
         test_times = ds.X.index[test_rows]
-        bt = backtest(oos['ensemble'], next_test, **bt_kwargs)
+        bt = backtest(oos['ensemble'], next_test, signal_mask=oos_signal['ensemble'], **bt_kwargs)
         bt['equity_curve']['time'] = [_iso(test_times[i]) for i in bt['equity_curve'].pop('index')]
         for name in model_names:
-            metrics[name]['backtest_return'] = backtest(oos[name], next_test, **bt_kwargs)['total_return']
+            metrics[name]['backtest_return'] = backtest(oos[name], next_test, signal_mask=oos_signal[name],
+                                                        **bt_kwargs)['total_return']
 
-        reliability = self._reliability(oos['ensemble'], y_test, fwd_test, ds.classes)
+        reliability = self._reliability(oos['ensemble'], y_test, fwd_test, ds.classes, oos_signal['ensemble'])
 
         # Final models on all labelled rows -> live signal for the latest closed candle.
         fit_idx, val_idx = split_train_val(np.arange(n), cfg.val_frac, purge)
-        final = {}
+        calib_idx = val_idx if len(val_idx) else fit_idx[-max(20, len(fit_idx) // 5):]
+        final, calib = {}, {}
         for name in model_names:
             cancel_check()
             report(0.05 + 0.8 * step / total_steps, f"Training final {name} model")
-            final[name] = create_model(name, n_classes, tf).fit(X, y, fit_idx, val_idx, cancel_check=cancel_check)
+            final[name] = create_model(name, n_classes, tf).fit(X, y, train_rows(fit_idx), train_rows(val_idx),
+                                                                cancel_check=cancel_check)
+            calib[name] = final[name].predict_proba(X, calib_idx)
             step += 1
+        calib['ensemble'] = ensemble_proba([calib[m] for m in model_names])
+        final_cutoff = confidence_cutoff(calib['ensemble'], ds.classes, keep)
         report(0.95, 'Generating signal...')
-        signal = self._signal(ds, X, final, reliability)
+        signal = self._signal(ds, X, final, reliability, final_cutoff)
 
         meta = {
             'symbol': symbol, 'timeframe': tf, 'classes': ds.classes, 'feature_columns': list(ds.X.columns),
             'trained_at': _iso(datetime.now(timezone.utc).replace(tzinfo=None)), 'models': model_names,
             'threshold': ds.threshold, 'horizon': ds.horizon, 'reliability': reliability,
-            'settings': self._settings_snapshot(),
+            'signal_cutoff': final_cutoff, 'settings': self._settings_snapshot(),
         }
         self._save_bundle(symbol, tf, final, meta)
 
@@ -254,8 +307,10 @@ class PredictionService:
         oos_df['close'] = ds.close.to_numpy()[test_rows]
         oos_df['fwd_log_return'] = fwd_test
         oos_df['actual'] = [ds.classes[int(v)] for v in y_test]
-        for name in model_names + ['ensemble']:
-            oos_df[f'{name}_pred'] = [ds.classes[i] for i in oos[name].argmax(axis=1)]
+        for name in names:
+            pred = [ds.classes[i] for i in oos[name].argmax(axis=1)]
+            oos_df[f'{name}_pred'] = pred
+            oos_df[f'{name}_signal'] = np.where(oos_signal[name], pred, 'none')
             for c, cname in enumerate(ds.classes):
                 oos_df[f'{name}_p_{cname}'] = oos[name][:, c].round(4)
 
@@ -266,9 +321,19 @@ class PredictionService:
                 'features': int(X.shape[1]), 'start': _iso(ds.X.index[0]), 'end': _iso(ds.X.index[-1]),
                 'test_start': _iso(test_times[0]), 'test_candles': int(len(test_rows)),
                 'class_balance': {c: _round((y_test == i).mean()) for i, c in enumerate(ds.classes)},
+                'feature_groups': self._feature_groups(list(ds.X.columns)),
+                'notes': ds.notes,
             },
             'label': {'mode': cfg.label_mode, 'classes': ds.classes, 'threshold': ds.threshold,
                       'horizon': ds.horizon},
+            'training': {
+                'drop_weak_moves': cfg.drops_weak_moves,
+                'strong_move_share': _round(strong[:n].mean()),
+            },
+            'signal_filter': {
+                'enabled': cfg.signal_filter, 'keep_fraction': keep,
+                'fold_cutoffs': [_round(c) for c in cutoffs['ensemble']], 'final_cutoff': _round(final_cutoff),
+            },
             'signal': signal,
             'metrics': metrics,
             'backtest': bt,
@@ -282,23 +347,40 @@ class PredictionService:
             self.oos[(symbol, tf)] = oos_df
         return result
 
-    def _signal(self, ds: Dataset, X: np.ndarray, models: Dict, reliability: Optional[Dict]) -> Dict:
+    @staticmethod
+    def _feature_groups(columns: List[str]) -> Dict[str, int]:
+        prefixes = {'futures': 'fut_', 'higher_timeframe': 'htf_', 'support_resistance': 'sr_', 'btc': 'btc_'}
+        macro = ('sp500_', 'nasdaq_', 'dxy_', 'vix_', 'fgi')
+        groups = {g: sum(c.startswith(p) for c in columns) for g, p in prefixes.items()}
+        groups['macro'] = sum(c.startswith(macro) for c in columns)
+        groups['price'] = len(columns) - sum(groups.values())
+        return groups
+
+    def _signal(self, ds: Dataset, X: np.ndarray, models: Dict, reliability: Optional[Dict],
+                cutoff: float = 0.0) -> Dict:
         spec = get_timeframe(ds.timeframe)
         last = np.array([len(X) - 1])
         per_model = {name: m.predict_proba(X, last)[0] for name, m in models.items()}
         proba = np.mean(list(per_model.values()), axis=0)
         pred = int(proba.argmax())
-        direction = ds.classes[pred]
+        raw_direction = ds.classes[pred]
         votes = [ds.classes[int(p.argmax())] for p in per_model.values()]
-        agreement = votes.count(direction) / len(votes)
+        agreement = votes.count(raw_direction) / len(votes)
         confidence = float(proba.max())
-        level = self._confidence_level(confidence, agreement, len(ds.classes))
+        score = float(signal_scores(proba[None, :], ds.classes)[0])
+        # Weak calls (below the cutoff, or neutral) are not signals.
+        is_signal = score > 0 and score >= cutoff
+        direction = raw_direction if is_signal else 'none'
+        level = self._confidence_level(confidence, agreement, len(ds.classes)) if is_signal else None
 
         candle_open = ds.X.index[-1]
         candle_close = candle_open + pd.Timedelta(minutes=spec.minutes)
         target = candle_close + pd.Timedelta(minutes=spec.minutes * ds.horizon)
         signal = {
             'direction': direction,
+            'raw_direction': raw_direction,
+            'filtered': not is_signal,
+            'cutoff': _round(cutoff),
             'probabilities': {c: _round(proba[i]) for i, c in enumerate(ds.classes)},
             'confidence': _round(confidence),
             'confidence_level': level,
@@ -311,10 +393,10 @@ class PredictionService:
             'based_on_close': _iso(candle_close),
             'target_time': _iso(target),
             'threshold': ds.threshold,
+            'notes': ds.notes,
         }
-        if reliability:
-            bucket = reliability.get(direction, {}).get(level)
-            signal['historical'] = bucket
+        if reliability and is_signal:
+            signal['historical'] = reliability.get(direction, {}).get(level)
         return signal
 
     @staticmethod
@@ -326,8 +408,10 @@ class PredictionService:
             return 'medium'
         return 'low'
 
-    def _reliability(self, proba: np.ndarray, y: np.ndarray, fwd: np.ndarray, classes: List[str]) -> Dict:
-        """How often past out-of-sample signals of each direction/confidence level were right."""
+    def _reliability(self, proba: np.ndarray, y: np.ndarray, fwd: np.ndarray, classes: List[str],
+                     signal_mask: np.ndarray) -> Dict:
+        """How often past out-of-sample signals (that passed the filter) of each direction/level were right."""
+        proba, y, fwd = proba[signal_mask], y[signal_mask], fwd[signal_mask]
         pred = proba.argmax(axis=1)
         conf = proba.max(axis=1)
         # Agreement is not tracked out-of-sample per row, so levels here use confidence alone.
@@ -357,6 +441,7 @@ class PredictionService:
             'close': [_round(v, 8) for v in tail['close']],
             'actual': tail['actual'].tolist(),
             'predicted': tail['ensemble_pred'].tolist(),
+            'signal': tail['ensemble_signal'].tolist(),
             'confidence': [_round(v) for v in tail[[f'ensemble_p_{c}' for c in classes]].max(axis=1)],
         }
 

@@ -104,9 +104,13 @@ class AppConfig:
     data_source: str = 'auto'              # 'auto' (Binance, then Yahoo), 'binance', 'yfinance'
     use_btc_context: bool = True           # add BTC features when predicting an altcoin
     use_macro: bool = True                 # add daily stock-index / Fear & Greed features
+    use_futures: bool = False              # Binance perpetual futures: funding, premium, open interest
+    use_htf_context: bool = False          # features from higher timeframes (e.g. 4h + 1d for a 1h model)
 
     # Labels
-    label_mode: str = 'ternary'            # 'ternary' (down/neutral/up) or 'binary' (down/up)
+    label_mode: str = 'binary'             # 'ternary' (down/neutral/up) or 'binary' (down/up)
+    drop_weak_moves: bool = True           # leave candles inside the neutral band out of training
+                                           # (binary only: in ternary mode those candles are the neutral class)
     horizon_bars: int = 1                  # predict the move over the next N candles
     neutral_thresholds: Dict[str, float] = field(
         default_factory=lambda: {k: v.neutral_threshold for k, v in TIMEFRAMES.items()}
@@ -147,6 +151,11 @@ class AppConfig:
     gbm_learning_rate: float = 0.03
     gbm_num_leaves: int = 15
 
+    # Weak-signal filter: only the most confident predictions become signals. The confidence
+    # cutoff is the (1 - keep) quantile on each fold's validation period, never the test period.
+    signal_filter: bool = True
+    signal_keep_fraction: float = 0.4
+
     # Backtest
     fee_bps: float = 10.0                  # per side, in basis points (10 = 0.1%)
     min_confidence: float = 0.0            # trade only when P(direction) >= this
@@ -157,6 +166,10 @@ class AppConfig:
 
     def threshold_for(self, timeframe: str) -> float:
         return float(self.neutral_thresholds.get(timeframe, get_timeframe(timeframe).neutral_threshold))
+
+    @property
+    def drops_weak_moves(self) -> bool:
+        return self.drop_weak_moves and self.label_mode == 'binary'
 
     def window_for(self, timeframe: str) -> int:
         return int(self.windows.get(timeframe, get_timeframe(timeframe).window))
@@ -204,6 +217,8 @@ class AppConfig:
             raise ValueError("sr_pivot_bars must be between 1 and 20")
         if not 20 <= self.sr_lookback <= 2000:
             raise ValueError("sr_lookback must be between 20 and 2000")
+        if not 0.05 <= self.signal_keep_fraction <= 1.0:
+            raise ValueError("signal_keep_fraction must be between 0.05 and 1")
         if not 0.0 <= self.min_confidence < 1.0:
             raise ValueError("min_confidence must be in [0, 1)")
 
