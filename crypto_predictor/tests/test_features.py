@@ -5,7 +5,7 @@ import pytest
 from backend.config import get_config
 from backend.evaluation import walk_forward_splits, split_train_val
 from backend.feature_engineering import FeatureEngineer, classify_returns
-from tests.conftest import make_candles, FakeFetcher
+from tests.conftest import make_candles, make_futures, FakeFetcher
 
 
 @pytest.mark.parametrize('support_resistance', [False, True])
@@ -24,6 +24,7 @@ def test_features_do_not_look_ahead(support_resistance):
 
 
 def test_label_is_next_candle_direction():
+    get_config().app_config.label_mode = 'ternary'
     fe = FeatureEngineer()
     df = make_candles(600, '1h')
     ds = fe.make_dataset(df, '1h')
@@ -98,3 +99,83 @@ def test_support_resistance_features_are_optional():
     assert not any(c.startswith('sr_') for c in off.columns)
     assert {'sr_res_dist_atr', 'sr_sup_dist_atr', 'sr_position', 'sr_break_up'} <= set(on.columns)
     assert len(on) == len(off)  # same rows, so with/without runs are directly comparable
+
+
+def _with_groups(df, futures):
+    from backend.feature_engineering import resample_ohlcv
+    higher = {'4h': resample_ohlcv(df, '4h'), '1d': resample_ohlcv(df, '1d')}
+    return FeatureEngineer().make_dataset(df, '1h', higher=higher, futures=futures).X
+
+
+def test_htf_and_futures_features_do_not_look_ahead():
+    cfg = get_config().app_config
+    cfg.use_htf_context = cfg.use_futures = True
+    full = make_candles(2500, '1h')
+    fut = make_futures(full)
+    cut_time = full.index[1900] + pd.Timedelta(minutes=17)   # not on any 4h/1d boundary
+    altered = full.copy()
+    altered.loc[altered.index >= cut_time, ['open', 'high', 'low', 'close']] *= 2.5
+    fut_alt = {k: (v.copy() if hasattr(v, 'copy') else v) for k, v in fut.items()}
+    for key in ('funding', 'premium', 'metrics'):
+        frame = fut_alt[key]
+        frame.loc[frame.index >= cut_time] *= 3.0
+    a, b = _with_groups(full, fut), _with_groups(altered, fut_alt)
+    assert any(c.startswith('htf_1d_') for c in a.columns) and any(c.startswith('fut_oi') for c in a.columns)
+    # A 1h candle opening at T closes at T+1h, so it may use data up to T+1h.
+    common = a.index[a.index + pd.Timedelta(hours=1) <= cut_time]
+    pd.testing.assert_frame_equal(a.loc[common], b.loc[common])
+
+
+def test_htf_uses_last_closed_higher_candle():
+    from backend.feature_engineering import resample_ohlcv
+    df = make_candles(24 * 40, '1h')
+    daily = resample_ohlcv(df, '1d')
+    f = FeatureEngineer().htf_features(df, '1h', {'1d': daily})
+    ret_daily = np.log(daily['close']).diff()
+    # 1h candle 10:00 on day D closes at 11:00: the latest closed daily candle is D-1.
+    t = pd.Timestamp(df.index[24 * 30].normalize()) + pd.Timedelta(hours=10)
+    assert np.isclose(f.loc[t, 'htf_1d_ret_1'], ret_daily.loc[t.normalize() - pd.Timedelta(days=1)])
+    # The 23:00 candle closes at midnight, when day D itself is complete.
+    t_last = t.normalize() + pd.Timedelta(hours=23)
+    assert np.isclose(f.loc[t_last, 'htf_1d_ret_1'], ret_daily.loc[t.normalize()])
+    # Forming-candle return at 10:00: from the day's open to the 10:00 candle's close.
+    assert np.isclose(f.loc[t, 'htf_1d_partial_ret'], np.log(df.loc[t, 'close'] / df.loc[t.normalize(), 'open']))
+
+
+def test_futures_values_align_to_when_they_were_known():
+    df = make_candles(500, '1h', start='2024-01-01')
+    fut = make_futures(df)
+    f = FeatureEngineer().futures_features(fut, df, '1h')
+    t = pd.Timestamp('2024-01-05 07:00')            # closes 08:00, exactly a funding settlement
+    assert np.isclose(f.loc[t, 'fut_funding'], fut['funding'].loc['2024-01-05 08:00', 'funding_rate'] * 1e4)
+    t2 = pd.Timestamp('2024-01-05 06:00')           # closes 07:00 -> still the 00:00 settlement
+    assert np.isclose(f.loc[t2, 'fut_funding'], fut['funding'].loc['2024-01-05 00:00', 'funding_rate'] * 1e4)
+    oi = fut['metrics']['open_interest']
+    expected = np.log(oi.loc['2024-01-05 08:00'] / oi.loc['2024-01-05 07:00'])
+    assert np.isclose(f.loc[t, 'fut_oi_chg_1'], expected)
+
+
+def test_stale_futures_drop_latest_rows_and_say_so():
+    cfg = get_config().app_config
+    cfg.use_futures = True
+    df = make_candles(1500, '1h')
+    fut = make_futures(df)
+    fut['metrics'] = fut['metrics'][fut['metrics'].index < df.index[-1] - pd.Timedelta(hours=12)]
+    ds = FeatureEngineer().make_dataset(df, '1h', futures=fut)
+    assert ds.X.index[-1] < df.index[-1]
+    assert any('lacks some features' in n for n in ds.notes)
+
+
+def test_parse_vision_metrics_with_and_without_header():
+    from backend.data_fetcher import parse_vision_metrics
+    header = ('create_time,symbol,sum_open_interest,sum_open_interest_value,count_toptrader_long_short_ratio,'
+              'sum_toptrader_long_short_ratio,count_long_short_ratio,sum_taker_long_short_vol_ratio')
+    rows = ['2024-01-01 00:05:00,BTCUSDT,80000.5,3.4e9,1.6,1.2,1.9,0.95',
+            '2024-01-01 00:10:00,BTCUSDT,80010.0,3.4e9,1.6,1.21,1.9,1.05']
+    import io
+    with_header = parse_vision_metrics(pd.read_csv(io.StringIO('\n'.join([header] + rows))))
+    without = parse_vision_metrics(pd.read_csv(io.StringIO('\n'.join(rows))))
+    for df in (with_header, without):
+        assert len(df) == 2
+        assert df['available_at'].iloc[0] == pd.Timestamp('2024-01-01 00:10:00')   # +5 min
+        assert np.isclose(df['open_interest'].iloc[1], 80010.0) and np.isclose(df['taker_ls'].iloc[1], 1.05)

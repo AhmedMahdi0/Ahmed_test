@@ -12,6 +12,25 @@ from backend import config as config_module  # noqa: E402
 from backend.config import get_timeframe  # noqa: E402
 
 
+def make_futures(candles: pd.DataFrame, seed: int = 0) -> dict:
+    """Synthetic futures context covering the same period as `candles`."""
+    rng = np.random.default_rng(seed)
+    start, end = candles.index[0], candles.index[-1] + pd.Timedelta(days=1)
+    settle = pd.date_range(start.floor('8h'), end, freq='8h')
+    snaps = pd.date_range(start, end, freq='15min')
+    oi = 1e5 * np.exp(np.cumsum(rng.normal(0, 0.002, len(snaps))))
+    return {
+        'funding': pd.DataFrame({'funding_rate': rng.normal(1e-4, 5e-5, len(settle))}, index=settle),
+        'premium': pd.DataFrame({'premium': rng.normal(0, 3e-4, len(candles))}, index=candles.index),
+        'metrics': pd.DataFrame({'open_interest': oi,
+                                 'top_trader_ls': np.exp(rng.normal(0, 0.1, len(snaps))),
+                                 'global_ls': np.exp(rng.normal(0, 0.1, len(snaps))),
+                                 'taker_ls': np.exp(rng.normal(0, 0.2, len(snaps)))},
+                                index=snaps.rename('available_at')),
+        'warnings': [],
+    }
+
+
 def make_candles(n: int, timeframe: str, seed: int = 0, phi: float = 0.2, start='2022-01-01') -> pd.DataFrame:
     """Synthetic candles whose returns are AR(1), so direction is partly predictable."""
     rng = np.random.default_rng(seed)
@@ -45,6 +64,9 @@ class FakeFetcher:
         df = make_candles(self.n, timeframe, seed=zlib.crc32(f'{symbol}-{timeframe}'.encode()) % 1000)
         df.attrs['source'] = 'fake'
         return df
+
+    def fetch_futures(self, symbol, timeframe, history_days=None):
+        return make_futures(self.fetch_ohlcv(symbol, timeframe))
 
     def fetch_macro(self):
         days = pd.date_range('2021-06-01', '2027-01-01', freq='D')

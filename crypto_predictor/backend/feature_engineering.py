@@ -7,8 +7,8 @@ close[t + horizon], so it is never visible to the features.
 """
 
 import logging
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,10 @@ from .config import get_config, get_timeframe
 logger = logging.getLogger(__name__)
 
 TERNARY_CLASSES = ['down', 'neutral', 'up']
+# Higher timeframes used as context for each model timeframe ('1w' is built from 1d candles).
+HTF_MAP = {'1h': ['4h', '1d'], '4h': ['1d', '1w'], '1d': ['1w']}
+HTF_MINUTES = {'4h': 240, '1d': 1440, '1w': 10080}
+HTF_COLUMNS = ['ret_1', 'ret_3', 'rsi', 'macd_hist', 'dist_ema20', 'dist_ema50', 'bb_pctb', 'atr_pct', 'vol_12']
 BINARY_CLASSES = ['down', 'up']
 
 
@@ -38,6 +42,7 @@ class Dataset:
     timeframe: str
     threshold: float
     horizon: int
+    notes: List[str] = field(default_factory=list)   # dropped columns, trimmed history, ...
 
     @property
     def labeled_mask(self) -> np.ndarray:
@@ -50,6 +55,37 @@ def _rsi(close: pd.Series, window: int) -> pd.Series:
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / window, adjust=False, min_periods=window).mean()
     rs = gain / loss.replace(0, np.nan)
     return (100 - 100 / (1 + rs)).fillna(100.0).where(gain.notna())
+
+
+def period_start(index: pd.DatetimeIndex, htf: str) -> pd.DatetimeIndex:
+    """Open time of the higher-timeframe candle each timestamp belongs to (Binance boundaries, UTC)."""
+    if htf == '1w':
+        days = index.normalize()
+        return days - pd.to_timedelta(days.day_of_week, unit='D')   # weeks start Monday 00:00
+    return index.floor(f'{HTF_MINUTES[htf]}min')
+
+
+def resample_ohlcv(df: pd.DataFrame, htf: str) -> pd.DataFrame:
+    """Aggregate candles into a higher timeframe (indexed by the higher candle's open time)."""
+    g = df.groupby(period_start(df.index, htf))
+    out = pd.DataFrame({'open': g['open'].first(), 'high': g['high'].max(), 'low': g['low'].min(),
+                        'close': g['close'].last(), 'volume': g['volume'].sum()})
+    out['quote_volume'] = g['quote_volume'].sum() if 'quote_volume' in df else np.nan
+    out['trades'] = np.nan
+    out['taker_buy_base'] = g['taker_buy_base'].sum(min_count=1) if 'taker_buy_base' in df else np.nan
+    out.index.name = 'time'
+    return out
+
+
+def _asof(index_times: pd.DatetimeIndex, frame: pd.DataFrame, tolerance=None) -> pd.DataFrame:
+    """For each time, the last row of `frame` whose index is <= that time."""
+    left = pd.DataFrame({'t': pd.DatetimeIndex(index_times).astype('datetime64[ns]')})
+    right = frame.copy()
+    right.index = pd.DatetimeIndex(right.index).astype('datetime64[ns]')
+    right = right.rename_axis('t_right').reset_index().sort_values('t_right')
+    merged = pd.merge_asof(left, right, left_on='t', right_on='t_right', direction='backward',
+                           tolerance=tolerance)
+    return merged.drop(columns=['t', 't_right'])
 
 
 def classify_returns(returns: pd.Series, threshold: float, label_mode: str) -> pd.Series:
@@ -216,6 +252,78 @@ class FeatureEngineer:
             f[f'sr_dist_low_{w}'] = (df['close'] - df['low'].rolling(w).min()) / atr_s
         return f.replace([np.inf, -np.inf], np.nan)
 
+    def htf_features(self, ohlcv: pd.DataFrame, timeframe: str, higher: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        Context from higher timeframes:
+          * the last *closed* higher candle's indicators (it becomes visible when it closes),
+          * the higher candle that is still forming, rebuilt from this timeframe's candles
+            up to now: return since it opened and where price sits in its range so far.
+        """
+        minutes = get_timeframe(timeframe).minutes
+        close_time = ohlcv.index + pd.Timedelta(minutes=minutes)
+        f = pd.DataFrame(index=ohlcv.index)
+        for name, candles in higher.items():
+            if candles is None or candles.empty:
+                continue
+            feats = self.candle_features(candles)[HTF_COLUMNS]
+            feats.index = candles.index + pd.Timedelta(minutes=HTF_MINUTES[name])   # known at its close
+            aligned = _asof(close_time, feats)
+            aligned.index = ohlcv.index
+            f = f.join(aligned.add_prefix(f'htf_{name}_'))
+
+            group = period_start(ohlcv.index, name)
+            p_open = ohlcv['open'].groupby(group).transform('first')
+            p_high = ohlcv['high'].groupby(group).cummax()
+            p_low = ohlcv['low'].groupby(group).cummin()
+            rng = (p_high - p_low).replace(0, np.nan)
+            f[f'htf_{name}_partial_ret'] = np.log(ohlcv['close'] / p_open)
+            f[f'htf_{name}_partial_pos'] = ((ohlcv['close'] - p_low) / rng).fillna(0.5)
+        return f.replace([np.inf, -np.inf], np.nan)
+
+    def futures_features(self, futures: Dict, ohlcv: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+        """Funding, perpetual premium and open-interest / positioning features."""
+        minutes = get_timeframe(timeframe).minutes
+        close_time = ohlcv.index + pd.Timedelta(minutes=minutes)
+        f = pd.DataFrame(index=ohlcv.index)
+
+        funding = futures.get('funding')
+        if funding is not None and not funding.empty:
+            fr = funding['funding_rate'] * 1e4                     # basis points per settlement
+            ff = pd.DataFrame({
+                'fut_funding': fr,
+                'fut_funding_mean_3': fr.rolling(3).mean(),         # ~1 day
+                'fut_funding_mean_21': fr.rolling(21).mean(),       # ~1 week
+                'fut_funding_z': (fr - fr.rolling(90).mean()) / fr.rolling(90).std(),
+            })
+            aligned = _asof(close_time, ff, tolerance=pd.Timedelta(hours=9))   # settles every 8h
+            aligned.index = ohlcv.index
+            f = f.join(aligned)
+
+        premium = futures.get('premium')
+        if premium is not None and not premium.empty:
+            prem = premium['premium'].reindex(ohlcv.index) * 1e4    # same candles, known at close
+            f['fut_premium'] = prem
+            f['fut_premium_chg'] = prem.diff()
+            f['fut_premium_mean_24'] = prem.rolling(24).mean()
+
+        metrics = futures.get('metrics')
+        if metrics is not None and not metrics.empty:
+            m = metrics.copy()
+            # Taker buy/sell is a flow: average it over the candle rather than taking one 5-minute snapshot.
+            m['taker_ls'] = m['taker_ls'].rolling(f'{minutes}min').mean()
+            tolerance = pd.Timedelta(minutes=max(2 * minutes, 180))
+            aligned = _asof(close_time, m, tolerance=tolerance)
+            aligned.index = ohlcv.index
+            oi = np.log(aligned['open_interest'])
+            f['fut_oi_chg_1'] = oi.diff()
+            f['fut_oi_chg_24'] = oi.diff(24)
+            f['fut_oi_z'] = (oi - oi.rolling(168).mean()) / oi.rolling(168).std()
+            for col in ('top_trader_ls', 'global_ls', 'taker_ls'):
+                level = np.log(aligned[col])
+                f[f'fut_{col}'] = level
+                f[f'fut_{col}_chg_24'] = level.diff(24)
+        return f.replace([np.inf, -np.inf], np.nan)
+
     def time_features(self, index: pd.DatetimeIndex, timeframe: str) -> pd.DataFrame:
         f = pd.DataFrame(index=index)
         dow = index.day_of_week
@@ -287,7 +395,9 @@ class FeatureEngineer:
                      ohlcv: pd.DataFrame,
                      timeframe: str,
                      btc: Optional[pd.DataFrame] = None,
-                     macro: Optional[pd.DataFrame] = None) -> Dataset:
+                     macro: Optional[pd.DataFrame] = None,
+                     higher: Optional[Dict[str, pd.DataFrame]] = None,
+                     futures: Optional[Dict] = None) -> Dataset:
         cfg = self.config.app_config
         horizon = cfg.horizon_bars
         threshold = cfg.threshold_for(timeframe)
@@ -301,12 +411,34 @@ class FeatureEngineer:
         if macro is not None and not macro.empty:
             parts.append(self.macro_features(macro, ohlcv.index, timeframe))
         X = pd.concat(parts, axis=1)
+        notes = []
 
         # Drop columns that are mostly missing (e.g. a macro source with a short history).
         coverage = X.notna().mean()
         X = X.loc[:, coverage >= 0.8]
+
+        # Opt-in groups: keep their columns and start the dataset once they have data, rather than
+        # silently dropping them. Only columns with less than half the history are given up.
+        opt_in = []
+        if cfg.use_htf_context and higher:
+            opt_in.append(('higher-timeframe', self.htf_features(ohlcv, timeframe, higher)))
+        if cfg.use_futures and futures:
+            opt_in.append(('futures', self.futures_features(futures, ohlcv, timeframe)))
+        for group, frame in opt_in:
+            cov = frame.notna().mean()
+            short = cov[cov < 0.5].index.tolist()
+            if short:
+                notes.append(f"{group}: dropped {len(short)} columns with under 50% history ({', '.join(short[:4])}"
+                             f"{'...' if len(short) > 4 else ''})")
+            X = X.join(frame.drop(columns=short))
+
         valid = X.notna().all(axis=1)
         X = X[valid]
+        if len(X) and opt_in and X.index[0] > ohlcv.index[0] + pd.Timedelta(days=30):
+            notes.append(f"history starts {X.index[0]:%Y-%m-%d} (when all selected data sources are available)")
+        if len(X) and X.index[-1] < ohlcv.index[-1]:
+            notes.append(f"latest candle {ohlcv.index[-1]:%Y-%m-%d %H:%M} lacks some features; "
+                         f"signal is based on {X.index[-1]:%Y-%m-%d %H:%M}")
 
         close = ohlcv['close'].reindex(X.index)
         full_close = ohlcv['close']
@@ -319,4 +451,5 @@ class FeatureEngineer:
 
         logger.info("Dataset %s: %d rows, %d features, %d labelled", timeframe, len(X), X.shape[1], int(y.notna().sum()))
         return Dataset(X=X, y=y, fwd_return=fwd, next_return=next_ret, persistence=persistence,
-                       close=close, classes=classes, timeframe=timeframe, threshold=threshold, horizon=horizon)
+                       close=close, classes=classes, timeframe=timeframe, threshold=threshold, horizon=horizon,
+                       notes=notes)
