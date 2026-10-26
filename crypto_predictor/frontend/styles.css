@@ -1703,3 +1703,15 @@ body {
     .feature-row { grid-template-columns: 6.5rem 1fr 3rem; }
     .btn-sm { margin-left: 0; }
 }
+
+/* Weak-signal filter (v3.1) */
+.signal-card.dir-none { --dir-color: var(--text-muted); }
+.signal-card.dir-none .signal-label { font-size: 1.6rem; }
+.signal-none-text { font-size: 0.85rem; color: var(--text-secondary); }
+.filter-keep { margin-top: 1rem; }
+.data-notes {
+    background: #EFF6FF; color: #1E3A8A; border: 1px solid #BFDBFE; border-radius: var(--radius-md);
+    padding: 0.6rem 1rem; margin: -0.75rem 0 1.5rem; font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.2rem;
+}
+.dir-none-text { color: var(--text-muted); }
+.checkbox-group small { color: var(--text-muted); font-size: 0.75rem; }

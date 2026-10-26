@@ -109,15 +109,35 @@
                             <p>What should the model predict?</p>
                             <div class="model-options">
                                 <label class="model-option">
-                                    <input type="radio" name="label-mode" value="ternary" checked>
-                                    <span class="model-info"><strong>Up / Neutral / Down</strong><small>Small moves count as neutral (recommended)</small></span>
+                                    <input type="radio" name="label-mode" value="binary_strong" checked>
+                                    <span class="model-info"><strong>Up / Down — strong moves only</strong><small>Weak candles (inside the neutral band) are left out of training</small></span>
                                 </label>
                                 <label class="model-option">
                                     <input type="radio" name="label-mode" value="binary">
-                                    <span class="model-info"><strong>Up / Down</strong><small>Every candle is either up or down</small></span>
+                                    <span class="model-info"><strong>Up / Down — all candles</strong><small>Every candle is used for training</small></span>
+                                </label>
+                                <label class="model-option">
+                                    <input type="radio" name="label-mode" value="ternary">
+                                    <span class="model-info"><strong>Up / Neutral / Down</strong><small>Small moves are their own class</small></span>
                                 </label>
                             </div>
-                            <p class="horizon-note">💡 Neutral thresholds can be tuned in Advanced Settings</p>
+                            <p class="horizon-note">💡 Neutral band per timeframe is in Advanced Settings</p>
+                        </div>
+
+                        <div class="config-card">
+                            <h3>🔇 Weak-Signal Filter</h3>
+                            <p>Hide calls the models are not confident about.</p>
+                            <div class="model-options">
+                                <label class="model-option">
+                                    <input type="checkbox" id="signal-filter" checked>
+                                    <span class="model-info"><strong>Hide weak signals</strong><small>Weak calls show as "No signal" and are left out of the results and backtest</small></span>
+                                </label>
+                            </div>
+                            <div class="advanced-input-group filter-keep">
+                                <label for="keep-fraction">Show the strongest (% of candles)</label>
+                                <input type="number" id="keep-fraction" min="5" max="100" step="5" value="40">
+                                <small>The confidence cutoff is set on a validation period before each test period</small>
+                            </div>
                         </div>
                     </div>
 
@@ -188,6 +208,12 @@
                                     <label><input type="checkbox" id="allow-short" data-key="allow_short"> Allow short in backtest</label>
                                     <label><input type="checkbox" id="use-btc" data-key="use_btc_context"> BTC context for altcoins</label>
                                     <label><input type="checkbox" id="use-macro" data-key="use_macro"> Macro (stocks, DXY, VIX, Fear &amp; Greed)</label>
+                                </div>
+                                <div class="advanced-input-group checkbox-group">
+                                    <small>Experimental feature groups (test with experiments/compare_features.py):</small>
+                                    <label><input type="checkbox" id="use-futures" data-key="use_futures"> Futures: funding, premium, open interest</label>
+                                    <label><input type="checkbox" id="use-htf" data-key="use_htf_context"> Higher-timeframe context</label>
+                                    <label><input type="checkbox" id="use-sr" data-key="use_support_resistance"> Support / resistance</label>
                                 </div>
                             </div>
                         </div>

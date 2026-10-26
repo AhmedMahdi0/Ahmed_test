@@ -5,6 +5,7 @@ const DIRECTION = {
     up: { icon: '▲', label: 'UP', cls: 'dir-up' },
     down: { icon: '▼', label: 'DOWN', cls: 'dir-down' },
     neutral: { icon: '●', label: 'NEUTRAL', cls: 'dir-neutral' },
+    none: { icon: '–', label: 'NO SIGNAL', cls: 'dir-none' },
 };
 const COLORS = { up: '#10B981', down: '#EF4444', neutral: '#9CA3AF', primary: '#667eea', muted: '#9CA3AF' };
 
@@ -160,8 +161,11 @@ async function loadConfig() {
             if (input.type === 'checkbox') input.checked = !!value;
             else input.value = value;
         });
-        const mode = document.querySelector(`input[name="label-mode"][value="${cfg.label_mode}"]`);
+        const modeValue = cfg.label_mode === 'ternary' ? 'ternary' : (cfg.drop_weak_moves ? 'binary_strong' : 'binary');
+        const mode = document.querySelector(`input[name="label-mode"][value="${modeValue}"]`);
         if (mode) mode.checked = true;
+        document.getElementById('signal-filter').checked = !!cfg.signal_filter;
+        document.getElementById('keep-fraction').value = Math.round(cfg.signal_keep_fraction * 100);
     } catch (error) {
         showToast('Failed to load settings', 'error');
     }
@@ -179,7 +183,15 @@ function updateStartButton() {
 }
 
 function collectSettings() {
-    const settings = { label_mode: selectedValues('label-mode')[0] || 'ternary', neutral_thresholds: {} };
+    const mode = selectedValues('label-mode')[0] || 'binary_strong';
+    const settings = {
+        label_mode: mode === 'ternary' ? 'ternary' : 'binary',
+        drop_weak_moves: mode === 'binary_strong',
+        signal_filter: document.getElementById('signal-filter').checked,
+        neutral_thresholds: {},
+    };
+    const keep = parseFloat(document.getElementById('keep-fraction').value);
+    if (!Number.isNaN(keep)) settings.signal_keep_fraction = Math.min(100, Math.max(5, keep)) / 100;
     document.querySelectorAll('.thr-input').forEach(input => {
         if (input.value !== '') settings.neutral_thresholds[input.dataset.tf] = parseFloat(input.value) / 100;
     });
@@ -359,9 +371,33 @@ function orderedTimeframes() {
     return TIMEFRAME_ORDER.filter(tf => state.result && state.result.timeframes[tf]);
 }
 
+function filterSummary(res) {
+    const sig = res.metrics.ensemble.signals;
+    if (!sig || !sig.n) return 'No past signals passed the filter.';
+    const skill = sig.directional_accuracy - sig.always_up_same_candles;
+    return `Past signals: shown on ${pct(sig.coverage)} of candles, right ${pct(sig.directional_accuracy)} ` +
+        `(always-up on the same candles: ${pct(sig.always_up_same_candles)}, ${skill >= 0 ? '+' : ''}${(skill * 100).toFixed(1)} pts)`;
+}
+
 function signalCard(tf, res) {
     const s = res.signal;
     const d = DIRECTION[s.direction];
+    if (s.direction === 'none') {
+        return `
+        <div class="signal-card dir-none">
+            <div class="signal-top"><span class="signal-tf">${TIMEFRAME_LABELS[tf]}</span>
+                <span class="confidence-badge">filtered</span></div>
+            <div class="signal-direction"><span class="signal-icon">${d.icon}</span><span class="signal-label">${d.label}</span></div>
+            <div class="signal-sub">next candle · closes ${formatDateTime(s.target_time)}</div>
+            <p class="signal-none-text">The call for this candle is too weak, so it is not shown.
+                Only the strongest ${pct(res.signal_filter.keep_fraction)} of calls become signals.</p>
+            <div class="signal-meta">
+                <div><span>Price at last close</span><b>${formatPrice(s.price)}</b></div>
+                <div><span>Neutral band</span><b>±${(s.threshold * 100).toFixed(2)}%</b></div>
+            </div>
+            <p class="signal-hist">${filterSummary(res)}</p>
+        </div>`;
+    }
     const classes = res.label.classes;
     const bars = [...classes].reverse().map(c => `
         <div class="prob-row">
@@ -392,10 +428,10 @@ function signalCard(tf, res) {
             <div class="signal-meta">
                 <div><span>Price at last close</span><b>${formatPrice(s.price)}</b></div>
                 <div><span>Neutral band</span><b>±${(s.threshold * 100).toFixed(2)}%</b></div>
-                <div><span>Test accuracy</span><b>${pct(ens.accuracy)}</b></div>
-                <div><span>Directional acc.</span><b>${pct(ens.directional_accuracy)}</b></div>
+                <div><span>Shown signals right</span><b>${pct(ens.signals.directional_accuracy)}</b></div>
+                <div><span>All calls right</span><b>${pct(ens.directional_accuracy)}</b></div>
             </div>
-            <p class="signal-hist">${hist}</p>
+            <p class="signal-hist">${hist}<br>${filterSummary(res)}</p>
         </div>`;
 }
 
@@ -416,17 +452,22 @@ function renderDetails(tf) {
             <span><b>Features</b> ${dd.features}</span>
             <span><b>Out-of-sample</b> ${formatDate(dd.test_start)} → ${formatDate(dd.end)} (${dd.test_candles.toLocaleString()} candles, ${res.walk_forward.splits} folds)</span>
             <span><b>Actual mix</b> ${balance}</span>
+            <span><b>Feature groups</b> ${groupSummary(dd.feature_groups)}</span>
+            <span><b>Training</b> ${res.training.drop_weak_moves
+                ? `strong moves only (${pct(res.training.strong_move_share)} of candles)` : 'all candles'}</span>
             <button class="btn btn-secondary btn-sm" id="export-tf">📥 CSV</button>
         </div>
+        ${(dd.notes || []).length ? `<div class="data-notes">${dd.notes.map(n => `<div>ℹ️ ${escapeHtml(n)}</div>`).join('')}</div>` : ''}
 
         <h4 class="detail-title">Model scoreboard (out-of-sample, walk-forward)</h4>
         <div class="table-container">${metricsTable(res)}</div>
-        <p class="metrics-note">💡 A model is only useful if it clearly beats the <i>baseline</i> rows. Directional accuracy:
-            when the model says UP or DOWN, how often the price actually moved that way.</p>
+        <p class="metrics-note">💡 A model is only useful if it clearly beats the <i>baseline</i> rows.
+            <b>Shown signals</b>: the calls that passed the weak-signal filter. Compare them with
+            <b>always-up on the same candles</b>: a filter can look accurate just by picking rising stretches.</p>
 
         <div class="detail-grid">
             <div class="detail-card">
-                <h4 class="detail-title">Backtest of the ensemble (fees ${bt.fee_bps} bps/side)</h4>
+                <h4 class="detail-title">Backtest: trading shown signals only (fees ${bt.fee_bps} bps/side)</h4>
                 <div class="bt-stats">
                     ${btStat('Strategy', signedPct(bt.total_return), bt.total_return)}
                     ${btStat('Buy & hold', signedPct(bt.buy_hold_return), bt.buy_hold_return)}
@@ -438,14 +479,14 @@ function renderDetails(tf) {
                 <div class="chart-wrapper small"><canvas id="equity-chart"></canvas></div>
             </div>
             <div class="detail-card">
-                <h4 class="detail-title">Confusion matrix (ensemble)</h4>
+                <h4 class="detail-title">Confusion matrix (ensemble, all calls before the filter)</h4>
                 ${confusionMatrix(res)}
                 <h4 class="detail-title">Top features</h4>
                 ${featureBars(res.feature_importance)}
             </div>
         </div>
 
-        <h4 class="detail-title">Recent out-of-sample signals</h4>
+        <h4 class="detail-title">Recent out-of-sample signals (shown signals only)</h4>
         <div class="chart-wrapper"><canvas id="history-chart"></canvas></div>
         <div class="table-container">${historyTable(res)}</div>
     `;
@@ -462,19 +503,18 @@ function metricsTable(res) {
     const bests = { accuracy: best('accuracy'), balanced_accuracy: best('balanced_accuracy'),
         f1_macro: best('f1_macro'), directional_accuracy: best('directional_accuracy') };
     const cell = (m, key) => `<td class="${m[key] != null && m[key] === bests[key] ? 'best' : ''}">${pct(m[key])}</td>`;
-    const conf = m => {
-        const c = m.confidence['0.60'] || m.confidence['0.50'];
-        return c && c.accuracy != null ? `${pct(c.accuracy)} <small>(${pct(c.coverage)} of time)</small>` : '--';
-    };
+    const shown = m => m.signals
+        ? `${pct(m.signals.directional_accuracy)} <small>(${pct(m.signals.coverage)} of candles)</small>` : '--';
+    const upSame = m => m.signals ? pct(m.signals.always_up_same_candles) : '';
     const order = ([a], [b]) => rank(a) - rank(b);
     return `<table class="predictions-table metrics-table">
         <thead><tr><th>Model</th><th>Accuracy</th><th>Balanced acc.</th><th>Macro F1</th>
-            <th>Directional acc.</th><th>Acc. when conf ≥ 60%</th><th>Backtest</th></tr></thead>
+            <th>Directional acc.</th><th>Shown signals right</th><th>Always-up, same candles</th><th>Backtest</th></tr></thead>
         <tbody>${rows.sort(order).map(([name, m]) => `
             <tr class="${name.startsWith('baseline') ? 'baseline-row' : ''} ${name === 'ensemble' ? 'ensemble-row' : ''}">
                 <td>${modelLabel(name)}</td>
                 ${cell(m, 'accuracy')}${cell(m, 'balanced_accuracy')}${cell(m, 'f1_macro')}${cell(m, 'directional_accuracy')}
-                <td>${conf(m)}</td>
+                <td>${shown(m)}</td><td>${upSame(m)}</td>
                 <td>${name === 'ensemble' ? signedPct(res.backtest.total_return) : (m.backtest_return != null ? signedPct(m.backtest_return) : '')}</td>
             </tr>`).join('')}
         </tbody></table>`;
@@ -508,8 +548,9 @@ function featureBars(items) {
 
 function historyTable(res) {
     const h = res.history;
-    const rows = h.time.map((t, i) => ({ t, close: h.close[i], pred: h.predicted[i], actual: h.actual[i], conf: h.confidence[i] }))
-        .slice(-15).reverse();
+    const rows = h.time.map((t, i) => ({ t, close: h.close[i], pred: h.signal[i], actual: h.actual[i], conf: h.confidence[i] }))
+        .filter(r => r.pred !== 'none').slice(-15).reverse();
+    if (!rows.length) return '<p class="metrics-note">No signals passed the filter in this period.</p>';
     return `<table class="predictions-table">
         <thead><tr><th>Candle</th><th>Close</th><th>Signal</th><th>Confidence</th><th>Actual</th><th></th></tr></thead>
         <tbody>${rows.map(r => `<tr>
@@ -519,6 +560,18 @@ function historyTable(res) {
             <td class="${DIRECTION[r.actual].cls}-text">${DIRECTION[r.actual].icon} ${DIRECTION[r.actual].label}</td>
             <td>${r.pred === r.actual ? '✅' : '❌'}</td></tr>`).join('')}
         </tbody></table>`;
+}
+
+function groupSummary(groups) {
+    const names = { price: 'price', btc: 'BTC', macro: 'macro', futures: 'futures',
+        higher_timeframe: 'higher TF', support_resistance: 'S/R' };
+    return Object.entries(groups || {}).filter(([, n]) => n > 0).map(([g, n]) => `${names[g] || g} ${n}`).join(' · ');
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function btStat(label, value, sign) {
@@ -551,7 +604,7 @@ function renderEquityChart(res) {
 
 function renderHistoryChart(res) {
     const h = res.history;
-    const points = dir => h.time.map((t, i) => (h.predicted[i] === dir ? { x: t, y: h.close[i] } : null)).filter(Boolean);
+    const points = dir => h.time.map((t, i) => (h.signal[i] === dir ? { x: t, y: h.close[i] } : null)).filter(Boolean);
     state.charts.history = new Chart(document.getElementById('history-chart'), {
         data: {
             datasets: [
